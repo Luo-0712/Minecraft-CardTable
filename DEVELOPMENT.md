@@ -457,25 +457,24 @@ MVP 不要求将每张卡牌作为独立实体放置在世界中。建议先使�
 
 ## 14. Forge 工程建议
 
-推荐的初始模块结构：
+### 14.1 包结构
+
+基础包为 `com.example.cardtable`（自有域名 + modid 两级），子包按功能分组。自定义方块放在 `block/custom` 子包，与其他按逻辑分类的区块保持一致。
 
 ```text
-src/main/java/<modid>/
-  api/
-  common/
-    block/
-    item/
-    table/
-    card/
-    deck/
-    persistence/
-    permission/
-  network/
-  client/
-    screen/
-    render/
-    input/
-  data/
+src/main/java/com/example/cardtable/
+  CardTableMod.java           # 主模组类：MODID 与注册表装配
+  Config.java                 # Forge 配置
+  block/
+    ModBlocks.java            # 方块 DeferredRegister 与方块注册项
+    custom/                   # 自定义行为方块（如 CardTableBlock）
+  item/
+    ModItems.java             # 物品 DeferredRegister 与物品注册项
+    ModCreativeModTabs.java   # 创造模式标签页 DeferredRegister
+  client/                     # 客户端专用代码（screen/render/input）
+  data/                       # 数据生成代码
+  network/                    # 网络包
+  api/                        # 对外扩展接口
 
 src/main/resources/
   META-INF/mods.toml
@@ -483,7 +482,13 @@ src/main/resources/
   data/<modid>/
 ```
 
-具体包名应在工程初始化后统一确定。客户端渲染代码不得被服务端初始化路径加载。
+### 14.2 命名规则
+
+- 包名两级：顶级为自有域名（如 `com.example`），下一级为 modid。
+- 子包按功能分组（`block`、`item`、`network`…），不做按层的分散；专用运行时代码隔离：客户端代码在 `client` 包、数据生成在 `data` 包、专用服务器代码在 `server` 包。
+- 功能类以类型后缀命名：`CardTableBlock`（Block）、`CardTableMod`（主类）、后续菜单用 `XxxMenu`；实体沿用 Mojang 的简单命名（如 `Pig`）。
+- 注册表类用 `ModBlocks` / `ModItems` 风格命名，`DeferredRegister` 与注册项集中在对应注册表类，由主类构造器统一挂载到 mod 事件总线。
+- 注册对象与监听事件的方式保持唯一并一致，避免同一逻辑出现两套入口。
 
 ## 15. MVP 范围
 

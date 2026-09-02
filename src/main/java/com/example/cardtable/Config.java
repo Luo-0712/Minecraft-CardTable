@@ -1,4 +1,4 @@
-package com.cardtable;
+package com.example.cardtable;
 
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
