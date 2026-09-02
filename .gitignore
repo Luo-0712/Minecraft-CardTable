@@ -1,0 +1,50 @@
+# ---- Gradle ----
+.gradle/
+build/
+out/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ---- Eclipse ----
+bin/
+*.launch
+.settings/
+.metadata
+.classpath
+.project
+
+# ---- IntelliJ IDEA ----
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# ---- VS Code ----
+.vscode/
+
+# ---- Forge 运行目录（世界存档、配置、崩溃报告等） ----
+run/
+run-data/
+runs/
+eclipse/
+
+# ---- 日志与崩溃报告 ----
+*.log
+crash-reports/
+logs/
+
+# ---- ForgeGradle 生成物 ----
+forge*changelog.txt
+*.tsrg
+*.srg
+
+# ---- 系统/编辑器临时文件 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 工具数据 ----
+.codebuddy/
+.zcode/
+
+# ---- Data Generator 缓存 ----
+src/generated/**/.cache/
