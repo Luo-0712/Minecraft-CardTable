@@ -1,6 +1,8 @@
 package com.example.cardtable.block.entity;
 
-import com.example.cardtable.state.CardTableState;
+import com.example.cardtable.block.custom.CardTableBlock;
+import com.example.cardtable.table.TableGroupState;
+import com.example.cardtable.table.TableSectionState;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.Connection;
@@ -12,47 +14,41 @@ import javax.annotation.Nullable;
 
 public class CardTableBlockEntity extends net.minecraft.world.level.block.entity.BlockEntity
 {
-    private static final String STATE_TAG = "TableState";
+    private static final String GROUP_STATE_TAG = "GroupState";
+    private static final String SECTION_STATE_TAG = "SectionState";
+    /** Pre-merge saves carried the whole table state under this tag. */
+    private static final String LEGACY_STATE_TAG = "TableState";
 
-    private CardTableState tableState = CardTableState.create();
+    private TableGroupState groupState = TableGroupState.create();
+    private TableSectionState sectionState = new TableSectionState();
 
     public CardTableBlockEntity(BlockPos position, BlockState blockState)
     {
         super(ModBlockEntities.CARD_TABLE.get(), position, blockState);
     }
 
-    public CardTableState getTableState()
+    public TableGroupState getGroupState()
     {
-        return this.tableState;
+        return this.groupState;
     }
 
-    public CardTableState.JoinResult join(Player player)
+    public TableSectionState getSectionState()
     {
-        CardTableState.JoinResult result = this.tableState.join(player.getUUID());
-        if (result == CardTableState.JoinResult.JOINED)
-        {
-            this.markStateChanged();
-        }
-        return result;
+        return this.sectionState;
     }
 
-    public boolean leave(Player player)
+    public void setGroupState(TableGroupState groupState)
     {
-        if (!this.tableState.leave(player.getUUID()))
-        {
-            return false;
-        }
-
-        this.markStateChanged();
-        return true;
+        this.groupState = groupState;
     }
 
-    public boolean isParticipant(Player player)
+    /** Whether the player occupies any seat in the group; see {@code TableGroupService}. */
+    public boolean isOccupant(Player player)
     {
-        return this.tableState.isParticipant(player.getUUID());
+        return player.getUUID().equals(this.sectionState.getOccupantId());
     }
 
-    private void markStateChanged()
+    public void markStateChanged()
     {
         this.setChanged();
         if (this.level != null)
@@ -66,16 +62,31 @@ public class CardTableBlockEntity extends net.minecraft.world.level.block.entity
     protected void saveAdditional(CompoundTag tag)
     {
         super.saveAdditional(tag);
-        tag.put(STATE_TAG, this.tableState.save());
+        tag.put(GROUP_STATE_TAG, this.groupState.save());
+        tag.put(SECTION_STATE_TAG, this.sectionState.save());
     }
 
     @Override
     public void load(CompoundTag tag)
     {
         super.load(tag);
-        this.tableState = tag.contains(STATE_TAG, CompoundTag.TAG_COMPOUND)
-                ? CardTableState.load(tag.getCompound(STATE_TAG))
-                : CardTableState.create();
+        if (tag.contains(LEGACY_STATE_TAG, CompoundTag.TAG_COMPOUND))
+        {
+            // Pre-merge table: carry the group identity over and seat the
+            // earliest recorded participant; later ones are released.
+            CompoundTag legacy = tag.getCompound(LEGACY_STATE_TAG);
+            this.groupState = TableGroupState.loadLegacy(legacy);
+            this.sectionState = TableSectionState.loadLegacy(legacy);
+        }
+        else
+        {
+            this.groupState = tag.contains(GROUP_STATE_TAG, CompoundTag.TAG_COMPOUND)
+                    ? TableGroupState.load(tag.getCompound(GROUP_STATE_TAG))
+                    : TableGroupState.create();
+            this.sectionState = tag.contains(SECTION_STATE_TAG, CompoundTag.TAG_COMPOUND)
+                    ? TableSectionState.load(tag.getCompound(SECTION_STATE_TAG))
+                    : new TableSectionState();
+        }
     }
 
     @Override

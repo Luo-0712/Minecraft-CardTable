@@ -5,10 +5,12 @@ import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.menu.CardTableMenu;
 import com.example.cardtable.network.NetworkHandler;
 import com.example.cardtable.network.packet.CardTableMembershipPacket;
-import com.example.cardtable.state.CardTableState;
+import com.example.cardtable.table.TableGraph;
+import com.example.cardtable.table.TableGroupService;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
@@ -25,20 +27,22 @@ import java.util.UUID;
 
 /**
  * Fullscreen top-down view of the table surface. Right-clicking the block
- * joins the table directly and opens this view: the playfield fills the
- * whole screen, participant seats ring the edge with each player's portrait
- * and name, and development debug info stays in the bottom-right corner
- * (F3 toggles it while the view is open).
+ * seats the player at that specific table and opens this view: the playfield
+ * fills the whole screen, one seat per table block rings the edge with each
+ * seated player's portrait and name, and development debug info stays in the
+ * bottom-right corner (F3 toggles it while the view is open).
  */
 public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 {
     /** The same texture used by the table block, so the canvas matches the board style. */
     private static final ResourceLocation TABLE_TEXTURE =
-            new ResourceLocation(CardTableMod.MODID, "textures/block/card_table_white.png");
+            new ResourceLocation(CardTableMod.MODID, "textures/block/quartz_block_top.png");
 
     private static final int SEAT_SIZE = 26;
     /** Seat ring inset from the screen edges. */
     private static final int SEAT_INSET = 40;
+    /** Side gaps around the board so the surrounding world stays visible on the left/right, like a container menu. */
+    private static final int SIDE_MARGIN = 18;
     /** Playfield inset from the screen edges, clamped down for small windows. */
     private static final int PLAYFIELD_INSET_X = 140;
     private static final int PLAYFIELD_INSET_Y = 96;
@@ -72,7 +76,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     @Override
     protected void init()
     {
-        // Fullscreen: the table surface covers the whole window.
+        // Near-fullscreen: the board keeps a small margin around the window.
         this.imageWidth = this.width;
         this.imageHeight = this.height;
         this.leftPos = 0;
@@ -96,54 +100,79 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     {
     }
 
+    // The merged group containing the clicked table, resolved against the
+    // client level's synced block entities (same BFS as the server).
     @Nullable
-    private CardTableState clientState()
+    private TableGroupService.GroupView clientGroup()
     {
         if (this.minecraft == null || this.minecraft.level == null)
         {
             return null;
         }
-        BlockEntity blockEntity = this.minecraft.level.getBlockEntity(this.menu.getTablePosition());
-        return blockEntity instanceof CardTableBlockEntity tableEntity ? tableEntity.getTableState() : null;
+        return TableGroupService.resolve(this.minecraft.level, this.menu.getTablePosition());
     }
 
-    private List<SeatSlot> computeSeats(CardTableState state)
+    // One seat per table block, ringed in the group's deterministic position
+    // order; {@code occupantId == null} marks an empty seat.
+    private List<SeatSlot> computeSeats(TableGroupService.GroupView group)
     {
         int centerX = this.width / 2;
         int centerY = this.height / 2;
-        // Elliptical ring so seats hug wide and tall windows alike.
-        double radiusX = this.width / 2.0D - SEAT_INSET;
-        double radiusY = this.height / 2.0D - SEAT_INSET;
+        // Elliptical ring sized to the board (which is inset from the window),
+        // so seats hug the table edge on wide and tall windows alike.
+        double radiusX = Math.max(1.0D, this.width / 2.0D - SIDE_MARGIN - SEAT_INSET);
+        double radiusY = Math.max(1.0D, this.height / 2.0D - SEAT_INSET);
 
-        List<UUID> participants = List.copyOf(state.getParticipantIds());
-        int maxSeats = state.getMaxParticipants();
-        List<SeatSlot> slots = new ArrayList<>(maxSeats);
-        for (int index = 0; index < maxSeats; index++)
+        List<BlockPos> positions = new ArrayList<>(group.positions());
+        // Same deterministic order as master election, so the ring is stable.
+        positions.sort(TableGraph::comparePositions);
+        int seatCount = positions.size();
+        List<SeatSlot> slots = new ArrayList<>(seatCount);
+        for (int index = 0; index < seatCount; index++)
         {
             // First seat at the top, then evenly around the table edge.
-            double angle = -Math.PI / 2.0D + (Math.PI * 2.0D * index) / maxSeats;
+            double angle = -Math.PI / 2.0D + (Math.PI * 2.0D * index) / seatCount;
             int seatX = centerX + (int) Math.round(Math.cos(angle) * radiusX);
             int seatY = centerY + (int) Math.round(Math.sin(angle) * radiusY);
-            UUID playerId = index < participants.size() ? participants.get(index) : null;
-            slots.add(new SeatSlot(index, seatX, seatY, playerId));
+            UUID occupantId = this.occupantAt(positions.get(index));
+            slots.add(new SeatSlot(index, seatX, seatY, occupantId));
         }
         return slots;
+    }
+
+    @Nullable
+    private UUID occupantAt(BlockPos position)
+    {
+        if (this.minecraft == null || this.minecraft.level == null)
+        {
+            return null;
+        }
+        BlockEntity blockEntity = this.minecraft.level.getBlockEntity(position);
+        return blockEntity instanceof CardTableBlockEntity tableEntity
+                ? tableEntity.getSectionState().getOccupantId() : null;
     }
 
     @Override
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY)
     {
-        // Board surface: the block's own texture, stretched across the screen,
-        // so the playfield keeps the table's warm wood grain exactly as the block looks.
-        graphics.blit(TABLE_TEXTURE, this.leftPos, this.topPos, this.width, this.height,
+        // Board surface: the block's own texture. It fills the window top to
+        // bottom (no vertical gap) while leaving a gap on the left/right so the
+        // surrounding world stays visible, and framed with a rim line so the
+        // surface reads as a table floating in the world.
+        int boardLeft = this.leftPos + SIDE_MARGIN;
+        int boardTop = this.topPos;
+        int boardWidth = this.width - SIDE_MARGIN * 2;
+        int boardHeight = this.height;
+        graphics.blit(TABLE_TEXTURE, boardLeft, boardTop, boardWidth, boardHeight,
                 0.0F, 0.0F, 16, 16, 16, 16);
+        graphics.renderOutline(boardLeft, boardTop, boardWidth, boardHeight, COLOR_WOOD_DARK);
 
         // Reserved play area in the centre for a later phase.
         int insetX = Math.min(PLAYFIELD_INSET_X, this.width / 6);
         int insetY = Math.min(PLAYFIELD_INSET_Y, this.height / 5);
-        int playLeft = this.leftPos + insetX;
-        int playTop = this.topPos + insetY;
-        int playWidth = this.width - insetX * 2;
+        int playLeft = boardLeft + insetX;
+        int playTop = boardTop + insetY;
+        int playWidth = this.width - insetX * 2 - SIDE_MARGIN * 2;
         int playHeight = this.height - insetY * 2;
         graphics.fill(playLeft, playTop, playLeft + playWidth, playTop + playHeight, COLOR_PLAYFIELD);
         graphics.renderOutline(playLeft, playTop, playWidth, playHeight, COLOR_PLAYFIELD_EDGE);
@@ -154,24 +183,21 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     {
         this.lastMouseX = mouseX;
         this.lastMouseY = mouseY;
-        this.renderBackground(graphics);
 
-        CardTableState state = this.clientState();
-        this.seats = state != null ? this.computeSeats(state) : List.of();
+        // No fullscreen menu backdrop on purpose: the surrounding world stays
+        // visible around the board, just like a container menu does.
+        TableGroupService.GroupView group = this.clientGroup();
+        this.seats = group != null ? this.computeSeats(group) : List.of();
 
         super.render(graphics, mouseX, mouseY, partialTick);
 
-        this.renderSeats(graphics, state, mouseX, mouseY);
+        this.renderSeats(graphics, mouseX, mouseY);
         this.renderStatus(graphics);
-        this.renderDebug(graphics, state);
+        this.renderDebug(graphics, group);
     }
 
-    private void renderSeats(GuiGraphics graphics, @Nullable CardTableState state, int mouseX, int mouseY)
+    private void renderSeats(GuiGraphics graphics, int mouseX, int mouseY)
     {
-        if (state == null)
-        {
-            return;
-        }
         UUID selfId = this.minecraft.player != null ? this.minecraft.player.getUUID() : null;
 
         for (SeatSlot seat : this.seats)
@@ -180,11 +206,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             int left = seat.x() - half;
             int top = seat.y() - half;
             boolean hovered = mouseX >= left && mouseX < left + SEAT_SIZE && mouseY >= top && mouseY < top + SEAT_SIZE;
-            boolean self = seat.playerId() != null && seat.playerId().equals(selfId);
-            boolean joinable = seat.playerId() == null
-                    && state.getParticipantCount() < state.getMaxParticipants();
+            boolean self = seat.occupantId() != null && seat.occupantId().equals(selfId);
+            boolean joinable = seat.occupantId() == null;
 
-            if (seat.playerId() == null)
+            if (seat.occupantId() == null)
             {
                 graphics.fill(left, top, left + SEAT_SIZE, top + SEAT_SIZE, COLOR_SEAT_EMPTY);
             }
@@ -196,7 +221,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             int outline = self ? COLOR_SEAT_SELF : hovered && joinable ? COLOR_HOVER : COLOR_WOOD_DARK;
             graphics.renderOutline(left, top, SEAT_SIZE, SEAT_SIZE, outline);
 
-            if (seat.playerId() != null)
+            if (seat.occupantId() != null)
             {
                 this.renderOccupant(graphics, seat, left, top);
             }
@@ -210,7 +235,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     private void renderOccupant(GuiGraphics graphics, SeatSlot seat, int left, int top)
     {
-        Player player = this.resolvePlayer(seat.playerId());
+        Player player = this.resolvePlayer(seat.occupantId());
         if (player != null)
         {
             // 3D portrait anchored at the seat plate's bottom edge; entity extends
@@ -221,7 +246,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         else
         {
-            // Neutral placeholder figure for a participant not present in the scene.
+            // Neutral placeholder figure for a seated player not present in the scene.
             graphics.fill(left + 8, top + 5, left + 18, top + 15, COLOR_TEXT_DIM);
             graphics.fill(left + 5, top + 16, left + 21, top + 23, COLOR_TEXT_DIM);
         }
@@ -259,7 +284,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         Component message = this.status;
         if (message.getString().isEmpty()
                 && !this.menu.isParticipant(this.minecraft.player)
-                && this.menu.getParticipantCount() >= this.menu.getMaxParticipants())
+                && this.menu.getSeatCount() > 0
+                && this.menu.getSeatedCount() >= this.menu.getSeatCount())
         {
             message = Component.translatable("gui.cardtable.full");
         }
@@ -271,18 +297,24 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     }
 
     // Development debug info lives in the bottom-right corner, toggled with F3.
-    private void renderDebug(GuiGraphics graphics, @Nullable CardTableState state)
+    private void renderDebug(GuiGraphics graphics, @Nullable TableGroupService.GroupView group)
     {
-        if (!this.showDebugInfo || state == null)
+        if (!this.showDebugInfo || group == null || this.minecraft == null || this.minecraft.level == null)
+        {
+            return;
+        }
+        BlockEntity master = this.minecraft.level.getBlockEntity(group.masterPos());
+        if (!(master instanceof CardTableBlockEntity masterEntity))
         {
             return;
         }
         List<Component> lines = List.of(
                 Component.translatable("gui.cardtable.members",
-                        state.getParticipantCount(), state.getMaxParticipants()),
-                Component.translatable("gui.cardtable.version", state.getVersion()),
+                        this.menu.getSeatedCount(), this.menu.getSeatCount()),
+                Component.translatable("gui.cardtable.version",
+                        masterEntity.getGroupState().getVersion()),
                 Component.translatable("gui.cardtable.table_id",
-                        state.getTableId().toString().substring(0, 8)));
+                        masterEntity.getGroupState().getTableId().toString().substring(0, 8)));
         int y = this.height - 12;
         for (Component line : lines)
         {
@@ -305,11 +337,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 {
                     continue;
                 }
-                if (seat.playerId() == null)
+                if (seat.occupantId() == null)
                 {
                     this.tryJoin();
                 }
-                else if (this.minecraft.player != null && seat.playerId().equals(this.minecraft.player.getUUID()))
+                else if (this.minecraft.player != null && seat.occupantId().equals(this.minecraft.player.getUUID()))
                 {
                     this.tryLeave();
                 }
@@ -325,7 +357,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return;
         }
-        if (this.menu.getParticipantCount() >= this.menu.getMaxParticipants())
+        if (this.menu.getSeatCount() > 0 && this.menu.getSeatedCount() >= this.menu.getSeatCount())
         {
             this.status = Component.translatable("gui.cardtable.full");
             return;
@@ -343,6 +375,6 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         this.status = Component.translatable("gui.cardtable.leave_sent");
     }
 
-    /** One seat around the table edge; {@code playerId == null} marks an empty seat. */
-    private record SeatSlot(int index, int x, int y, @Nullable UUID playerId) {}
+    /** One seat around the table edge; {@code occupantId == null} marks an empty seat. */
+    private record SeatSlot(int index, int x, int y, @Nullable UUID occupantId) {}
 }

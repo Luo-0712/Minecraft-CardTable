@@ -2,7 +2,7 @@ package com.example.cardtable.block.custom;
 
 import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.menu.CardTableMenu;
-import com.example.cardtable.state.CardTableState;
+import com.example.cardtable.table.TableGroupService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -11,15 +11,14 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.BlockBehaviour;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
@@ -27,6 +26,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.network.NetworkHooks;
 
 import javax.annotation.Nullable;
+
 public class CardTableBlock extends BaseEntityBlock
 {
     // Hitboxes in 1/16 blocks, must stay in sync with models/block/card_table.json
@@ -78,8 +78,27 @@ public class CardTableBlock extends BaseEntityBlock
         return true;
     }
 
-    // Right-click joins the table directly, then opens the fullscreen table
-    // view. When the table is full the view still opens, as a spectator view.
+    // A freshly placed table mints its own group identity; merging with an
+    // adjacent group (if any) is handled right after by the group service.
+    @Override
+    public void onPlace(BlockState state, Level level, BlockPos position, BlockState oldState, boolean isMoving)
+    {
+        super.onPlace(state, level, position, oldState, isMoving);
+        TableGroupService.onTablePlaced(level, position);
+    }
+
+    // Adjacent survivors re-resolve their groups; splitting into independent
+    // groups is safe because seats live per block.
+    @Override
+    public void onRemove(BlockState state, Level level, BlockPos position, BlockState newState, boolean isMoving)
+    {
+        TableGroupService.onTableRemoved(level, position);
+        super.onRemove(state, level, position, newState, isMoving);
+    }
+
+    // Right-click seats the player at this specific table block (one seat per
+    // table), then opens the fullscreen table view. Clicking an occupied
+    // table still opens the view, as a spectator view.
     @Override
     public InteractionResult use(BlockState blockState, Level level, BlockPos position, Player player, InteractionHand hand, BlockHitResult hitResult)
     {
@@ -91,16 +110,8 @@ public class CardTableBlock extends BaseEntityBlock
         {
             return InteractionResult.CONSUME;
         }
-        if (!(level.getBlockEntity(position) instanceof CardTableBlockEntity tableEntity))
-        {
-            return InteractionResult.PASS;
-        }
 
-        CardTableState tableState = tableEntity.getTableState();
-        if (!tableState.isParticipant(player.getUUID()))
-        {
-            tableEntity.join(player);
-        }
+        TableGroupService.join(level, position, player);
 
         MenuProvider menuProvider = new SimpleMenuProvider(
                 (containerId, inventory, openingPlayer) -> new CardTableMenu(containerId, inventory, position),

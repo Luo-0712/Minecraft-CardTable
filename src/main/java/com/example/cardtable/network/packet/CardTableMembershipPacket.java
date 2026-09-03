@@ -1,12 +1,11 @@
 package com.example.cardtable.network.packet;
 
-import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.menu.CardTableMenu;
+import com.example.cardtable.table.TableGroupService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.network.NetworkEvent;
 
 import java.util.function.Supplier;
@@ -42,19 +41,13 @@ public record CardTableMembershipPacket(boolean joining, BlockPos tablePosition)
                 return;
             }
 
-            BlockEntity blockEntity = player.level().getBlockEntity(packet.tablePosition);
-            if (!(blockEntity instanceof CardTableBlockEntity cardTableBlockEntity))
-            {
-                return;
-            }
-
             if (packet.joining)
             {
-                cardTableBlockEntity.join(player);
+                TableGroupService.join(player.level(), packet.tablePosition, player);
             }
             else
             {
-                cardTableBlockEntity.leave(player);
+                TableGroupService.leave(player.level(), packet.tablePosition, player);
             }
         });
         context.setPacketHandled(true);
