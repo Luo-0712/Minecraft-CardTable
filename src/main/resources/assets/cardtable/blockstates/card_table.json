@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "cardtable:block/card_table"
+    }
+  }
+}

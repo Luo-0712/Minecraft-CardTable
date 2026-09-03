@@ -1,0 +1,10 @@
+{
+  "block.cardtable.card_table": "牌桌",
+  "menu.cardtable.card_table": "牌桌",
+  "gui.cardtable.leave_sent": "已离开牌桌",
+  "gui.cardtable.full": "牌桌已满",
+  "gui.cardtable.members": "参与人数：%s / %s",
+  "gui.cardtable.table_id": "桌面：%s",
+  "gui.cardtable.version": "版本：%s",
+  "gui.cardtable.seat_empty": "空位"
+}

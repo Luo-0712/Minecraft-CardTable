@@ -1,0 +1,90 @@
+{
+  "credit": "Made with Blockbench",
+  "textures": {
+    "card_table": "cardtable:block/card_table",
+    "particle": "cardtable:block/card_table"
+  },
+  "elements": [
+    {
+      "name": "tabletop",
+      "from": [0, 10, 0],
+      "to": [16, 12, 16],
+      "faces": {
+        "north": { "uv": [0, 0, 16, 2], "texture": "#card_table" },
+        "east":  { "uv": [0, 0, 16, 2], "texture": "#card_table" },
+        "south": { "uv": [0, 0, 16, 2], "texture": "#card_table" },
+        "west":  { "uv": [0, 0, 16, 2], "texture": "#card_table" },
+        "up":    { "uv": [0, 0, 16, 16], "texture": "#card_table" },
+        "down":  { "uv": [0, 0, 16, 16], "texture": "#card_table" }
+      }
+    },
+    {
+      "name": "leg_north_west",
+      "from": [0, 0, 0],
+      "to": [2, 10, 2],
+      "faces": {
+        "north": { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "east":  { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "south": { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "west":  { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "up":    { "uv": [0, 0, 2, 2], "texture": "#card_table" },
+        "down":  { "uv": [0, 0, 2, 2], "texture": "#card_table" }
+      }
+    },
+    {
+      "name": "leg_north_east",
+      "from": [14, 0, 0],
+      "to": [16, 10, 2],
+      "faces": {
+        "north": { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "east":  { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "south": { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "west":  { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "up":    { "uv": [0, 0, 2, 2], "texture": "#card_table" },
+        "down":  { "uv": [0, 0, 2, 2], "texture": "#card_table" }
+      }
+    },
+    {
+      "name": "leg_south_west",
+      "from": [0, 0, 14],
+      "to": [2, 10, 16],
+      "faces": {
+        "north": { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "east":  { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "south": { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "west":  { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "up":    { "uv": [0, 0, 2, 2], "texture": "#card_table" },
+        "down":  { "uv": [0, 0, 2, 2], "texture": "#card_table" }
+      }
+    },
+    {
+      "name": "leg_south_east",
+      "from": [14, 0, 14],
+      "to": [16, 10, 16],
+      "faces": {
+        "north": { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "east":  { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "south": { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "west":  { "uv": [0, 0, 2, 10], "texture": "#card_table" },
+        "up":    { "uv": [0, 0, 2, 2], "texture": "#card_table" },
+        "down":  { "uv": [0, 0, 2, 2], "texture": "#card_table" }
+      }
+    }
+  ],
+  "display": {
+    "thirdperson_righthand": {
+      "rotation": [-12, 0, 0],
+      "scale": [0.46, 0.45, 0.46]
+    },
+    "firstperson_righthand": {
+      "scale": [0.59, 0.47, 0.35]
+    },
+    "firstperson_lefthand": {
+      "scale": [0.59, 0.47, 0.38]
+    },
+    "gui": {
+      "rotation": [23, -45, 0],
+      "scale": [0.7, 0.69, 0.69]
+    }
+  }
+}

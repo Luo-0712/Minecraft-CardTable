@@ -1,0 +1,10 @@
+{
+  "block.cardtable.card_table": "Card Table",
+  "menu.cardtable.card_table": "Card Table",
+  "gui.cardtable.leave_sent": "You left the table",
+  "gui.cardtable.full": "Table is full",
+  "gui.cardtable.members": "Players: %s / %s",
+  "gui.cardtable.table_id": "Table: %s",
+  "gui.cardtable.version": "Version: %s",
+  "gui.cardtable.seat_empty": "Empty"
+}
