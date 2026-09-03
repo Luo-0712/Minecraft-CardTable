@@ -5,6 +5,20 @@ plugins {
     id 'net.minecraftforge.gradle' version '[6.0,6.2)'
 }
 
+// Gradle 依据 java.util.Properties 规范以 ISO-8859-1 读取 gradle.properties，
+// 中文会被逐字节拆成 Latin-1 字符；再以 UTF-8 写进 mods.toml 就变成"双重编码"乱码
+// (例如 "果寄开发" -> "æå¯å¼å")。这里用 UTF-8 重新加载并覆盖同名项目属性，
+// 必须在 minecraft { } 与 processResources 读取这些属性之前执行。
+def utf8Props = new Properties()
+rootProject.file('gradle.properties').withInputStream { stream ->
+    utf8Props.load(new InputStreamReader(stream, java.nio.charset.StandardCharsets.UTF_8))
+}
+utf8Props.stringPropertyNames().each { key ->
+    if (project.hasProperty(key)) {
+        project.ext.set(key, utf8Props.getProperty(key))
+    }
+}
+
 version = mod_version
 group = mod_group_id
 
@@ -61,6 +75,10 @@ minecraft {
         // applies to all the run configs below
         configureEach {
             workingDirectory project.file('run')
+
+            // Minecraft 1.20.1 运行于 Java 17，Windows 下默认字符集是 GBK。
+            // 显式固定为 UTF-8，避免任何隐式依赖平台编码的读写把中文弄坏。
+            jvmArgs '-Dfile.encoding=UTF-8'
 
             // Recommended logging data for a userdev environment
             // The markers can be added/remove as needed separated by commas.
@@ -130,6 +148,9 @@ dependencies {
     // then special handling is done to allow a setup of a vanilla dependency without the use of an external repository.
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+
     // Example mod dependency with JEI - using fg.deobf() ensures the dependency is remapped to your development mappings
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly fg.deobf("mezz.jei:jei-${mc_version}-common-api:${jei_version}")
@@ -159,6 +180,9 @@ tasks.named('processResources', ProcessResources).configure {
             mod_authors: mod_authors, mod_description: mod_description,
     ]
     inputs.properties replaceProperties
+
+    // 模板展开必须按 UTF-8 读写，否则 mods.toml 中的中文描述会变成双重编码乱码
+    filteringCharset = 'UTF-8'
 
     filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
         expand replaceProperties + [project: project]
@@ -203,5 +227,9 @@ publishing {
 }
 
 tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+    options.encoding = 'UTF-8' // Use the UTF-8 charset for the Gradle daemon
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
 }

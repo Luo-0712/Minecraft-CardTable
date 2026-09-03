@@ -48,3 +48,6 @@ desktop.ini
 
 # ---- Data Generator 缓存 ----
 src/generated/**/.cache/
+
+# ---- 本地文档（仅本地查阅，不随仓库分发） ----
+doc/
