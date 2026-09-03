@@ -32,6 +32,12 @@ eclipse/
 crash-reports/
 logs/
 
+# ---- 构建输出重定向 / 调试脚本（AI 辅助文件，不入库） ----
+build_output.txt
+compile_log.txt
+*.ps1
+*.py
+
 # ---- ForgeGradle 生成物 ----
 forge*changelog.txt
 *.tsrg
