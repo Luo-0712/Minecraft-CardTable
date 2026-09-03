@@ -16,6 +16,10 @@ public final class ModItems
     public static final RegistryObject<Item> CARD_TABLE_ITEM = ITEMS.register("card_table", () -> new BlockItem(
             ModBlocks.CARD_TABLE.get(), new Item.Properties()));
 
+    // One whole deck of cards; the NBT carries the card set id
+    public static final RegistryObject<Item> DECK = ITEMS.register("deck",
+            () -> new DeckItem(new Item.Properties().stacksTo(1)));
+
     private ModItems()
     {
     }

@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "cardtable:standard",
+  "name": "标准扑克",
+  "version": "1.0.0",
+  "set": {
+    "name": "标准扑克",
+    "back": "back"
+  }
+}

@@ -1,0 +1,418 @@
+[
+  {
+    "id": "ace_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.ace_of_spades"
+    },
+    "front": "ace_of_spades",
+    "sort": 0
+  },
+  {
+    "id": "two_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.two_of_spades"
+    },
+    "front": "two_of_spades",
+    "sort": 1
+  },
+  {
+    "id": "three_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.three_of_spades"
+    },
+    "front": "three_of_spades",
+    "sort": 2
+  },
+  {
+    "id": "four_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.four_of_spades"
+    },
+    "front": "four_of_spades",
+    "sort": 3
+  },
+  {
+    "id": "five_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.five_of_spades"
+    },
+    "front": "five_of_spades",
+    "sort": 4
+  },
+  {
+    "id": "six_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.six_of_spades"
+    },
+    "front": "six_of_spades",
+    "sort": 5
+  },
+  {
+    "id": "seven_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.seven_of_spades"
+    },
+    "front": "seven_of_spades",
+    "sort": 6
+  },
+  {
+    "id": "eight_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.eight_of_spades"
+    },
+    "front": "eight_of_spades",
+    "sort": 7
+  },
+  {
+    "id": "nine_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.nine_of_spades"
+    },
+    "front": "nine_of_spades",
+    "sort": 8
+  },
+  {
+    "id": "ten_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.ten_of_spades"
+    },
+    "front": "ten_of_spades",
+    "sort": 9
+  },
+  {
+    "id": "jack_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.jack_of_spades"
+    },
+    "front": "jack_of_spades",
+    "sort": 10
+  },
+  {
+    "id": "queen_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.queen_of_spades"
+    },
+    "front": "queen_of_spades",
+    "sort": 11
+  },
+  {
+    "id": "king_of_spades",
+    "display_name": {
+      "translate": "card.cardtable.standard.king_of_spades"
+    },
+    "front": "king_of_spades",
+    "sort": 12
+  },
+  {
+    "id": "ace_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.ace_of_hearts"
+    },
+    "front": "ace_of_hearts",
+    "sort": 13
+  },
+  {
+    "id": "two_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.two_of_hearts"
+    },
+    "front": "two_of_hearts",
+    "sort": 14
+  },
+  {
+    "id": "three_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.three_of_hearts"
+    },
+    "front": "three_of_hearts",
+    "sort": 15
+  },
+  {
+    "id": "four_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.four_of_hearts"
+    },
+    "front": "four_of_hearts",
+    "sort": 16
+  },
+  {
+    "id": "five_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.five_of_hearts"
+    },
+    "front": "five_of_hearts",
+    "sort": 17
+  },
+  {
+    "id": "six_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.six_of_hearts"
+    },
+    "front": "six_of_hearts",
+    "sort": 18
+  },
+  {
+    "id": "seven_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.seven_of_hearts"
+    },
+    "front": "seven_of_hearts",
+    "sort": 19
+  },
+  {
+    "id": "eight_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.eight_of_hearts"
+    },
+    "front": "eight_of_hearts",
+    "sort": 20
+  },
+  {
+    "id": "nine_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.nine_of_hearts"
+    },
+    "front": "nine_of_hearts",
+    "sort": 21
+  },
+  {
+    "id": "ten_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.ten_of_hearts"
+    },
+    "front": "ten_of_hearts",
+    "sort": 22
+  },
+  {
+    "id": "jack_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.jack_of_hearts"
+    },
+    "front": "jack_of_hearts",
+    "sort": 23
+  },
+  {
+    "id": "queen_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.queen_of_hearts"
+    },
+    "front": "queen_of_hearts",
+    "sort": 24
+  },
+  {
+    "id": "king_of_hearts",
+    "display_name": {
+      "translate": "card.cardtable.standard.king_of_hearts"
+    },
+    "front": "king_of_hearts",
+    "sort": 25
+  },
+  {
+    "id": "ace_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.ace_of_clubs"
+    },
+    "front": "ace_of_clubs",
+    "sort": 26
+  },
+  {
+    "id": "two_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.two_of_clubs"
+    },
+    "front": "two_of_clubs",
+    "sort": 27
+  },
+  {
+    "id": "three_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.three_of_clubs"
+    },
+    "front": "three_of_clubs",
+    "sort": 28
+  },
+  {
+    "id": "four_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.four_of_clubs"
+    },
+    "front": "four_of_clubs",
+    "sort": 29
+  },
+  {
+    "id": "five_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.five_of_clubs"
+    },
+    "front": "five_of_clubs",
+    "sort": 30
+  },
+  {
+    "id": "six_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.six_of_clubs"
+    },
+    "front": "six_of_clubs",
+    "sort": 31
+  },
+  {
+    "id": "seven_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.seven_of_clubs"
+    },
+    "front": "seven_of_clubs",
+    "sort": 32
+  },
+  {
+    "id": "eight_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.eight_of_clubs"
+    },
+    "front": "eight_of_clubs",
+    "sort": 33
+  },
+  {
+    "id": "nine_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.nine_of_clubs"
+    },
+    "front": "nine_of_clubs",
+    "sort": 34
+  },
+  {
+    "id": "ten_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.ten_of_clubs"
+    },
+    "front": "ten_of_clubs",
+    "sort": 35
+  },
+  {
+    "id": "jack_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.jack_of_clubs"
+    },
+    "front": "jack_of_clubs",
+    "sort": 36
+  },
+  {
+    "id": "queen_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.queen_of_clubs"
+    },
+    "front": "queen_of_clubs",
+    "sort": 37
+  },
+  {
+    "id": "king_of_clubs",
+    "display_name": {
+      "translate": "card.cardtable.standard.king_of_clubs"
+    },
+    "front": "king_of_clubs",
+    "sort": 38
+  },
+  {
+    "id": "ace_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.ace_of_diamonds"
+    },
+    "front": "ace_of_diamonds",
+    "sort": 39
+  },
+  {
+    "id": "two_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.two_of_diamonds"
+    },
+    "front": "two_of_diamonds",
+    "sort": 40
+  },
+  {
+    "id": "three_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.three_of_diamonds"
+    },
+    "front": "three_of_diamonds",
+    "sort": 41
+  },
+  {
+    "id": "four_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.four_of_diamonds"
+    },
+    "front": "four_of_diamonds",
+    "sort": 42
+  },
+  {
+    "id": "five_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.five_of_diamonds"
+    },
+    "front": "five_of_diamonds",
+    "sort": 43
+  },
+  {
+    "id": "six_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.six_of_diamonds"
+    },
+    "front": "six_of_diamonds",
+    "sort": 44
+  },
+  {
+    "id": "seven_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.seven_of_diamonds"
+    },
+    "front": "seven_of_diamonds",
+    "sort": 45
+  },
+  {
+    "id": "eight_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.eight_of_diamonds"
+    },
+    "front": "eight_of_diamonds",
+    "sort": 46
+  },
+  {
+    "id": "nine_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.nine_of_diamonds"
+    },
+    "front": "nine_of_diamonds",
+    "sort": 47
+  },
+  {
+    "id": "ten_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.ten_of_diamonds"
+    },
+    "front": "ten_of_diamonds",
+    "sort": 48
+  },
+  {
+    "id": "jack_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.jack_of_diamonds"
+    },
+    "front": "jack_of_diamonds",
+    "sort": 49
+  },
+  {
+    "id": "queen_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.queen_of_diamonds"
+    },
+    "front": "queen_of_diamonds",
+    "sort": 50
+  },
+  {
+    "id": "king_of_diamonds",
+    "display_name": {
+      "translate": "card.cardtable.standard.king_of_diamonds"
+    },
+    "front": "king_of_diamonds",
+    "sort": 51
+  }
+]

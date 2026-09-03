@@ -1,7 +1,10 @@
 package com.example.cardtable;
 
+import com.example.cardtable.api.CardRegistry;
 import com.example.cardtable.block.ModBlocks;
 import com.example.cardtable.block.entity.ModBlockEntities;
+import com.example.cardtable.content.ContentPackLoader;
+import com.example.cardtable.item.DeckItem;
 import com.example.cardtable.item.ModCreativeModTabs;
 import com.example.cardtable.item.ModItems;
 import com.example.cardtable.menu.ModMenus;
@@ -34,14 +37,21 @@ public class CardTableMod
         modEventBus.addListener(this::addCreative);
 
         NetworkHandler.register();
+        ContentPackLoader.bootstrap(modEventBus);
     }
 
-    // Add the card table item to the building blocks tab
+    // Add the card table item plus one deck per loaded card set to the
+    // building blocks tab; deck contents come from CardRegistry, which is
+    // frozen during common setup before this event fires.
     private void addCreative(BuildCreativeModeTabContentsEvent event)
     {
         if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS)
         {
             event.accept(ModItems.CARD_TABLE_ITEM);
+            for (var set : CardRegistry.allSets())
+            {
+                event.accept(DeckItem.create(set.id()));
+            }
         }
     }
 }

@@ -15,7 +15,6 @@ import javax.annotation.Nullable;
 public class CardTableBlockEntity extends net.minecraft.world.level.block.entity.BlockEntity
 {
     private static final String GROUP_STATE_TAG = "GroupState";
-    private static final String SECTION_STATE_TAG = "SectionState";
     /** Pre-merge saves carried the whole table state under this tag. */
     private static final String LEGACY_STATE_TAG = "TableState";
 
@@ -63,7 +62,7 @@ public class CardTableBlockEntity extends net.minecraft.world.level.block.entity
     {
         super.saveAdditional(tag);
         tag.put(GROUP_STATE_TAG, this.groupState.save());
-        tag.put(SECTION_STATE_TAG, this.sectionState.save());
+        tag.put(TableSectionState.SECTION_STATE_TAG, this.sectionState.save());
     }
 
     @Override
@@ -83,16 +82,22 @@ public class CardTableBlockEntity extends net.minecraft.world.level.block.entity
             this.groupState = tag.contains(GROUP_STATE_TAG, CompoundTag.TAG_COMPOUND)
                     ? TableGroupState.load(tag.getCompound(GROUP_STATE_TAG))
                     : TableGroupState.create();
-            this.sectionState = tag.contains(SECTION_STATE_TAG, CompoundTag.TAG_COMPOUND)
-                    ? TableSectionState.load(tag.getCompound(SECTION_STATE_TAG))
+            this.sectionState = tag.contains(TableSectionState.SECTION_STATE_TAG, CompoundTag.TAG_COMPOUND)
+                    ? TableSectionState.load(tag.getCompound(TableSectionState.SECTION_STATE_TAG))
                     : new TableSectionState();
         }
     }
 
+    // The world-sync tag must never carry hand contents: every tracking
+    // client receives it, so only a count travels here and the occupant's
+    // real hand arrives via the directed HandSyncPacket instead.
     @Override
     public CompoundTag getUpdateTag()
     {
-        return this.saveWithoutMetadata();
+        CompoundTag tag = this.saveWithoutMetadata();
+        tag.put(TableSectionState.SECTION_STATE_TAG,
+                TableSectionState.stripHandForSync(tag.getCompound(TableSectionState.SECTION_STATE_TAG)));
+        return tag;
     }
 
     @Nullable

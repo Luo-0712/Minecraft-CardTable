@@ -78,17 +78,12 @@ public class CardTableBlock extends BaseEntityBlock
         return true;
     }
 
-    // A freshly placed table mints its own group identity; merging with an
-    // adjacent group (if any) is handled right after by the group service.
-    @Override
-    public void onPlace(BlockState state, Level level, BlockPos position, BlockState oldState, boolean isMoving)
-    {
-        super.onPlace(state, level, position, oldState, isMoving);
-        TableGroupService.onTablePlaced(level, position);
-    }
-
-    // Adjacent survivors re-resolve their groups; splitting into independent
-    // groups is safe because seats live per block.
+    // Merge propagation does NOT run here: LevelChunk#setBlockState calls
+    // onPlace before the new block entity exists, so TableGroupService handles
+    // merges from EntityPlaceEvent instead, where the block is fully placed.
+    // Adjacent survivors re-resolve their groups on removal (with this block
+    // excluded, since its entity is still attached during this callback);
+    // splitting into independent groups is safe because seats live per block.
     @Override
     public void onRemove(BlockState state, Level level, BlockPos position, BlockState newState, boolean isMoving)
     {
