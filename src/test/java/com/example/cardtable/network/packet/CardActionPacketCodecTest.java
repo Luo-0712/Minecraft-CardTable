@@ -1,9 +1,11 @@
 package com.example.cardtable.network.packet;
 
+import com.example.cardtable.api.TableLayoutDefinition;
 import com.example.cardtable.card.ZoneRef;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec2;
 import org.junit.jupiter.api.Test;
 
@@ -19,44 +21,58 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Locks the byte-level contract of the action packet: whatever {@code encode()}
  * writes must be consumed by {@code decode()} exactly once.
  *
- * <p>The two shared piles used to be the exception: {@code writeZone()} wrote a
- * section-position presence flag for them, while {@code readZone()} skipped it
- * via {@code isGroupLevel()}. Every Move aimed at a pile therefore left one
- * unconsumed byte in the buffer, and the following {@code surfacePos} was read
- * from the wrong position.</p>
+ * <p>Since protocol 3 the zone is addressed by its open layout id plus an
+ * optional seat section; unknown ids are rejected server-side and never
+ * reach the state.</p>
  */
 class CardActionPacketCodecTest
 {
     private static final BlockPos TABLE_POS = new BlockPos(12, 64, -7);
     private static final BlockPos SECTION_POS = new BlockPos(12, 64, -8);
     private static final UUID CARD_ID = UUID.randomUUID();
+    private static final ResourceLocation PACK_ZONE =
+            new ResourceLocation("cardtable", "my_tcg/bench");
 
     @Test
     void moveToDrawPileRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(ZoneRef.Zone.DRAW_PILE, null), null));
+                new ZoneRef(TableLayoutDefinition.ZONE_DRAW_PILE, null), null));
     }
 
     @Test
     void moveToDiscardPileRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(ZoneRef.Zone.DISCARD_PILE, null), null));
+                new ZoneRef(TableLayoutDefinition.ZONE_DISCARD_PILE, null), null));
     }
 
     @Test
-    void moveToSurfaceRoundTrips()
+    void moveToFreeZoneRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(ZoneRef.Zone.SURFACE, SECTION_POS), new Vec2(0.25F, 0.75F)));
+                new ZoneRef(TableLayoutDefinition.ZONE_FREE, SECTION_POS), new Vec2(0.25F, 0.75F)));
     }
 
     @Test
     void moveToHandRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(ZoneRef.Zone.HAND, SECTION_POS), null));
+                new ZoneRef(TableLayoutDefinition.ZONE_HAND, SECTION_POS), null));
+    }
+
+    @Test
+    void moveToPackZoneWithSectionRoundTrips()
+    {
+        assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
+                new ZoneRef(PACK_ZONE, SECTION_POS), new Vec2(0.1F, 0.9F)));
+    }
+
+    @Test
+    void moveToPackZoneWithoutSectionRoundTrips()
+    {
+        assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
+                new ZoneRef(PACK_ZONE, null), new Vec2(0.5F, 0.5F)));
     }
 
     @Test
@@ -81,7 +97,13 @@ class CardActionPacketCodecTest
     void shuffleRoundTrips()
     {
         assertActionRoundTrip(new CardActionPacket.Action.Shuffle(
-                new ZoneRef(ZoneRef.Zone.DRAW_PILE, null)));
+                new ZoneRef(TableLayoutDefinition.ZONE_DRAW_PILE, null)));
+    }
+
+    @Test
+    void shuffleToPackStackZoneRoundTrips()
+    {
+        assertActionRoundTrip(new CardActionPacket.Action.Shuffle(new ZoneRef(PACK_ZONE, SECTION_POS)));
     }
 
     /** Non-Move actions are records with value equality, so a plain compare suffices. */
@@ -104,14 +126,14 @@ class CardActionPacketCodecTest
         CardActionPacket decoded = CardActionPacket.decode(buffer);
 
         assertEquals(0, buffer.readableBytes(),
-                "a Move aimed at " + move.target().zone() + " must leave no unconsumed byte");
+                "a Move aimed at " + move.target().zoneId() + " must leave no unconsumed byte");
         assertEquals(TABLE_POS, decoded.tablePosition());
         assertTrue(decoded.action() instanceof CardActionPacket.Action.Move,
                 "the action kind must survive the round trip");
 
         CardActionPacket.Action.Move decodedMove = (CardActionPacket.Action.Move) decoded.action();
         assertEquals(move.instanceId(), decodedMove.instanceId());
-        assertEquals(move.target().zone(), decodedMove.target().zone());
+        assertEquals(move.target().zoneId(), decodedMove.target().zoneId());
         assertEquals(move.target().sectionPos(), decodedMove.target().sectionPos());
         assertVec2Equals(move.surfacePos(), decodedMove.surfacePos());
     }

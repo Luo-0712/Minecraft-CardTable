@@ -20,6 +20,7 @@ public class RegisterCardDefinitionsEvent extends Event
 {
     private final Map<ResourceLocation, CardDefinition> cards = new HashMap<>();
     private final Map<ResourceLocation, CardSetDefinition> sets = new HashMap<>();
+    private final Map<ResourceLocation, TableLayoutDefinition> layouts = new HashMap<>();
 
     /** Registers one card; throws if the id was already taken in this event. */
     public void register(CardDefinition card)
@@ -41,6 +42,16 @@ public class RegisterCardDefinitionsEvent extends Event
         }
     }
 
+    /** Registers one table layout; throws if the id was already taken in this event. */
+    public void register(TableLayoutDefinition layout)
+    {
+        java.util.Objects.requireNonNull(layout, "layout");
+        if (this.layouts.putIfAbsent(layout.id(), layout) != null)
+        {
+            throw new IllegalArgumentException("Duplicate table layout id: " + layout.id());
+        }
+    }
+
     /**
      * Internal view of the registration buffer, read exactly once by the core
      * content pack loader after dispatch. Not part of the public contract.
@@ -57,5 +68,14 @@ public class RegisterCardDefinitionsEvent extends Event
     public Map<ResourceLocation, CardSetDefinition> setsSnapshot()
     {
         return Collections.unmodifiableMap(this.sets);
+    }
+
+    /**
+     * Internal view of the registration buffer, read exactly once by the core
+     * content pack loader after dispatch. Not part of the public contract.
+     */
+    public Map<ResourceLocation, TableLayoutDefinition> layoutsSnapshot()
+    {
+        return Collections.unmodifiableMap(this.layouts);
     }
 }

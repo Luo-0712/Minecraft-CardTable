@@ -13,7 +13,7 @@ import net.minecraftforge.network.simple.SimpleChannel;
 public final class NetworkHandler
 {
     // "2": content pack handshake (request/list) added in the card content phase.
-    private static final String PROTOCOL_VERSION = "2";
+    private static final String PROTOCOL_VERSION = "3";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(CardTableMod.MODID, "main"),

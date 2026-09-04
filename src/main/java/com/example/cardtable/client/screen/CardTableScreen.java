@@ -4,8 +4,12 @@ import com.example.cardtable.CardTableMod;
 import com.example.cardtable.api.CardDefinition;
 import com.example.cardtable.api.CardRegistry;
 import com.example.cardtable.api.CardSetDefinition;
+import com.example.cardtable.api.TableLayoutDefinition;
+import com.example.cardtable.api.ZoneDefinition;
 import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.card.CardInstance;
+import com.example.cardtable.card.SurfaceZone;
+import com.example.cardtable.card.ZoneState;
 import com.example.cardtable.client.ClientHandStore;
 import com.example.cardtable.client.card.CardTextureResolver;
 import com.example.cardtable.menu.CardTableMenu;
@@ -61,9 +65,19 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     /** Vanilla "generic_54" container panel, reused as the backpack background. */
     private static final ResourceLocation INVENTORY_PANEL =
             new ResourceLocation(CardTableMod.MODID, "textures/gui/generic_54.png");
-    private static final int INVENTORY_PANEL_TEX = 256;
-    /** Nine-slice border of the panel texture, in source pixels. */
-    private static final int INVENTORY_PANEL_BORDER = 16;
+    // The panel artwork occupies only the top-left of the 256x256 atlas; the
+    // rest is transparent. Sizing the nine-slice to the full atlas made the
+    // right/bottom borders sample transparent pixels, so the visible panel
+    // fell short of the slot grid.
+    private static final int INVENTORY_PANEL_TEX_WIDTH = 176;
+    private static final int INVENTORY_PANEL_TEX_HEIGHT = 222;
+    /** Nine-slice border of the panel artwork, in source pixels (1px outline + 2px highlight). */
+    private static final int INVENTORY_PANEL_BORDER = 3;
+    /** Flat interior strip (title area above the slot grid) stretched into the nine-slice centre. */
+    private static final int INVENTORY_PANEL_FILL_U = 64;
+    private static final int INVENTORY_PANEL_FILL_V = 8;
+    private static final int INVENTORY_PANEL_FILL_WIDTH = 32;
+    private static final int INVENTORY_PANEL_FILL_HEIGHT = 4;
     /** Gap between the slot grid and the panel edge. */
     private static final int INVENTORY_PANEL_PADDING = 8;
 
@@ -118,10 +132,15 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private Drag drag;
     @Nullable
     private Rect handStripRect;
-    @Nullable
-    private Rect drawPileRect;
-    @Nullable
-    private Rect discardPileRect;
+
+    // Layout-driven render state, rebuilt every frame by renderZones():
+    // drop/hover targets in render order (last entry = topmost) and the cards
+    // currently visible on the playfield with their pixel rects.
+    private List<ZoneHit> zoneHits = List.of();
+    private List<RenderedCard> renderedCards = List.of();
+    // True while the bound layout vanished from the local registry: the view
+    // degrades to the default layout and the status line warns about it.
+    private boolean layoutMissing;
 
     // Inventory layout, written by layoutSlots() and reused by the hand strip.
     private int inventoryLeft;
@@ -292,6 +311,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         return this.width - insetX * 2 - SIDE_MARGIN * 2;
     }
 
+    private int playfieldHeight()
+    {
+        int insetY = Math.min(PLAYFIELD_INSET_Y, this.height / 5);
+        return this.height - insetY * 2;
+    }
+
     @Override
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY)
     {
@@ -319,8 +344,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
         this.renderInventoryPanel(graphics);
         this.renderDeckSlotBackground(graphics);
-        this.renderCells(graphics, mouseX, mouseY);
-        this.renderPiles(graphics);
+        this.renderZones(graphics, mouseX, mouseY);
     }
 
     private void renderDeckSlotBackground(GuiGraphics graphics)
@@ -366,87 +390,78 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 panelRight - panelLeft, panelBottom - panelTop);
     }
 
-    // Manual nine-slice: stretch the panel texture to any rect while keeping its
-    // border crisp. 1.20.1's GuiGraphics has no public blitNineSliced, so the
-    // 9 regions are drawn with plain blits (corners, edges, centre).
+    // Manual nine-slice: stretch the panel artwork to any rect while keeping
+    // its border crisp. 1.20.1's GuiGraphics has no public blitNineSliced, so
+    // the 9 regions are drawn with plain blits (corners, edges, centre). The
+    // centre is sampled from the flat title strip, not the slot-grid interior,
+    // so stretching it never leaks the vanilla chest grid into the panel.
     private void blitNineSliced(GuiGraphics graphics, ResourceLocation texture, int x, int y, int w, int h)
     {
         int b = INVENTORY_PANEL_BORDER;
-        int t = INVENTORY_PANEL_TEX;
-        int mid = t - b * 2;
+        int texW = INVENTORY_PANEL_TEX_WIDTH;
+        int texH = INVENTORY_PANEL_TEX_HEIGHT;
+        int midW = texW - b * 2;
+        int midH = texH - b * 2;
         int innerW = Math.max(0, w - b * 2);
         int innerH = Math.max(0, h - b * 2);
 
         // Corners.
-        graphics.blit(texture, x, y, b, b, 0.0F, 0.0F, b, b, t, t);
-        graphics.blit(texture, x + w - b, y, b, b, (float) (t - b), 0.0F, b, b, t, t);
-        graphics.blit(texture, x, y + h - b, b, b, 0.0F, (float) (t - b), b, b, t, t);
-        graphics.blit(texture, x + w - b, y + h - b, b, b, (float) (t - b), (float) (t - b), b, b, t, t);
+        graphics.blit(texture, x, y, b, b, 0.0F, 0.0F, b, b, texW, texH);
+        graphics.blit(texture, x + w - b, y, b, b, (float) (texW - b), 0.0F, b, b, texW, texH);
+        graphics.blit(texture, x, y + h - b, b, b, 0.0F, (float) (texH - b), b, b, texW, texH);
+        graphics.blit(texture, x + w - b, y + h - b, b, b, (float) (texW - b), (float) (texH - b), b, b, texW, texH);
 
         // Edges (stretch along their length).
-        graphics.blit(texture, x + b, y, innerW, b, (float) b, 0.0F, mid, b, t, t);
-        graphics.blit(texture, x + b, y + h - b, innerW, b, (float) b, (float) (t - b), mid, b, t, t);
-        graphics.blit(texture, x, y + b, b, innerH, 0.0F, (float) b, b, mid, t, t);
-        graphics.blit(texture, x + w - b, y + b, b, innerH, (float) (t - b), (float) b, b, mid, t, t);
+        graphics.blit(texture, x + b, y, innerW, b, (float) b, 0.0F, midW, b, texW, texH);
+        graphics.blit(texture, x + b, y + h - b, innerW, b, (float) b, (float) (texH - b), midW, b, texW, texH);
+        graphics.blit(texture, x, y + b, b, innerH, 0.0F, (float) b, b, midH, texW, texH);
+        graphics.blit(texture, x + w - b, y + b, b, innerH, (float) (texW - b), (float) b, b, midH, texW, texH);
 
-        // Centre (stretch both ways; the interior grid compresses subtly).
-        graphics.blit(texture, x + b, y + b, innerW, innerH, (float) b, (float) b, mid, mid, t, t);
+        // Centre (stretch the flat strip both ways).
+        graphics.blit(texture, x + b, y + b, innerW, innerH,
+                (float) INVENTORY_PANEL_FILL_U, (float) INVENTORY_PANEL_FILL_V,
+                INVENTORY_PANEL_FILL_WIDTH, INVENTORY_PANEL_FILL_HEIGHT, texW, texH);
     }
 
-    private void renderCells(GuiGraphics graphics, int mouseX, int mouseY)
+    // Layout-driven playfield rendering -------------------------------------
+
+    /**
+     * Resolves the layout the table currently runs against the local registry.
+     * A null binding is the classic default; a binding that vanished from the
+     * registry degrades to the default and flags {@link #layoutMissing} so the
+     * status line can warn (bad drops are then rejected server-side, so this
+     * only ever affects appearance).
+     */
+    private TableLayoutDefinition resolveActiveLayout(TableGroupState groupState)
     {
-        for (Cell cell : this.cells)
+        this.layoutMissing = false;
+        ResourceLocation layoutId = groupState.getActiveLayoutId();
+        if (layoutId == null)
         {
-            graphics.renderOutline(cell.x(), cell.y(), cell.width(), cell.height(), COLOR_PLAYFIELD_EDGE);
-            if (this.minecraft == null || this.minecraft.level == null)
-            {
-                continue;
-            }
-            if (!(this.minecraft.level.getBlockEntity(cell.position()) instanceof CardTableBlockEntity section))
-            {
-                continue;
-            }
-            for (SurfaceZoneEntry entry : surfaceEntries(section))
-            {
-                if (this.isDragging(entry.card()))
-                {
-                    continue; // Held by the mouse; the zone shows it gone already.
-                }
-                int[] position = surfaceCardPosition(cell, entry);
-                boolean hovered = mouseX >= position[0] && mouseX < position[0] + CARD_WIDTH
-                        && mouseY >= position[1] && mouseY < position[1] + CARD_HEIGHT;
-                this.drawCard(graphics, entry.card(), entry.card().isFaceUp(),
-                        position[0], position[1], CARD_WIDTH, CARD_HEIGHT, hovered);
-            }
+            return TableLayoutDefinition.defaultLayout();
         }
+        TableLayoutDefinition layout = CardRegistry.getLayout(layoutId);
+        if (layout == null)
+        {
+            this.layoutMissing = true;
+            return TableLayoutDefinition.defaultLayout();
+        }
+        return layout.normalized();
     }
 
-    /** Normalized surface position → pixel top-left inside the cell. */
-    private static int[] surfaceCardPosition(Cell cell, SurfaceZoneEntry entry)
+    /**
+     * Rebuilds the frame's zone render/hit data from the active layout and
+     * draws every zone by kind. Cell outlines are drawn first (board
+     * structure); zones render in layout declaration order, so the last zone
+     * is visually topmost and hit-tested first.
+     */
+    private void renderZones(GuiGraphics graphics, int mouseX, int mouseY)
     {
-        int cardX = cell.x() + 2 + (int) (entry.x() * Math.max(0, cell.width() - CARD_WIDTH - 4));
-        int cardY = cell.y() + 2 + (int) (entry.y() * Math.max(0, cell.height() - CARD_HEIGHT - 4));
-        return new int[] {cardX, cardY};
-    }
-
-    // Surface entries come from the section's synced state; the local record
-    // keeps the render loop free of SurfaceZone internals.
-    private List<SurfaceZoneEntry> surfaceEntries(CardTableBlockEntity section)
-    {
-        List<SurfaceZoneEntry> entries = new ArrayList<>();
-        section.getSectionState().getSurface().cards()
-                .forEach(card -> entries.add(new SurfaceZoneEntry(card.card(), card.x(), card.y())));
-        return entries;
-    }
-
-    private record SurfaceZoneEntry(CardInstance card, float x, float y)
-    {
-    }
-
-    // The shared piles render at the playfield's top corners as stacked card
-    // backs with their count; draw pile left, discard pile right.
-    private void renderPiles(GuiGraphics graphics)
-    {
+        List<RenderedCard> cards = new ArrayList<>();
+        List<ZoneHit> hits = new ArrayList<>();
+        this.renderedCards = cards;
+        this.zoneHits = hits;
+        this.layoutMissing = false;
         if (this.minecraft == null || this.minecraft.level == null)
         {
             return;
@@ -457,27 +472,178 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return;
         }
+        TableLayoutDefinition layout = resolveActiveLayout(groupState);
+
+        for (Cell cell : this.cells)
+        {
+            graphics.renderOutline(cell.x(), cell.y(), cell.width(), cell.height(), COLOR_PLAYFIELD_EDGE);
+        }
+
         int playLeft = playfieldLeft();
         int playTop = playfieldTop();
-
-        int drawX = playLeft + 8;
-        int drawY = playTop + 16;
-        int drawCount = groupState.getDrawPile().size();
-        if (this.drag != null && containsInstance(groupState.getDrawPile(), this.drag.instanceId()))
+        int playWidth = playfieldWidth();
+        int playHeight = playfieldHeight();
+        for (ZoneDefinition zone : layout.zones())
         {
-            drawCount--; // Pile top is on the mouse.
+            if (TableLayoutDefinition.ZONE_HAND.equals(zone.id()))
+            {
+                continue; // the hand renders as the fixed strip, never on the playfield
+            }
+            if (zone.scope() == ZoneDefinition.Scope.SHARED)
+            {
+                renderZone(graphics, zone, scaledRect(playLeft, playTop, playWidth, playHeight, zone),
+                        null, groupState, cards, hits, mouseX, mouseY);
+            }
+            else
+            {
+                for (Cell cell : this.cells)
+                {
+                    if (!(this.minecraft.level.getBlockEntity(cell.position()) instanceof CardTableBlockEntity section))
+                    {
+                        continue;
+                    }
+                    renderZone(graphics, zone, scaledRect(cell.x(), cell.y(), cell.width(), cell.height(), zone),
+                            section, groupState, cards, hits, mouseX, mouseY);
+                }
+            }
         }
-        this.drawPileRect = pileRect(drawX, drawY);
-        this.renderPile(graphics, drawCount, drawX, drawY);
+    }
 
-        int discardX = playLeft + playfieldWidth() - CARD_WIDTH - 8;
-        int discardCount = groupState.getDiscardPile().size();
-        if (this.drag != null && containsInstance(groupState.getDiscardPile(), this.drag.instanceId()))
+    private void renderZone(GuiGraphics graphics, ZoneDefinition zone, Rect rect,
+                            @Nullable CardTableBlockEntity section, TableGroupState groupState,
+                            List<RenderedCard> cards, List<ZoneHit> hits, int mouseX, int mouseY)
+    {
+        BlockPos sectionPos = section != null ? section.getBlockPos() : null;
+        if (zone.kind() == ZoneDefinition.Kind.STACK)
         {
-            discardCount--;
+            List<CardInstance> pile = stackOf(zone, section, groupState);
+            int count = pile.size();
+            if (this.drag != null && containsInstance(pile, this.drag.instanceId()))
+            {
+                count--; // pile top is on the mouse
+            }
+            Rect hit = pileRect(rect.x(), rect.y());
+            hits.add(new ZoneHit(zone, sectionPos, rect, hit));
+            this.renderPile(graphics, count, rect.x(), rect.y());
+            this.drawZoneLabel(graphics, zone, rect);
+            if (!pile.isEmpty())
+            {
+                // The whole stack is grabbable; hover resolves to its top card.
+                cards.add(new RenderedCard(pile.get(pile.size() - 1), hit.x(), hit.y(), hit.width(), hit.height()));
+            }
+            return;
         }
-        this.discardPileRect = pileRect(discardX, drawY);
-        this.renderPile(graphics, discardCount, discardX, drawY);
+        hits.add(new ZoneHit(zone, sectionPos, rect, rect));
+        if (zone.kind() == ZoneDefinition.Kind.GRID)
+        {
+            this.renderGridSlots(graphics, zone, rect);
+        }
+        List<ZoneState.PlacedCard> placed = placedOf(zone, section, groupState);
+        for (ZoneState.PlacedCard entry : placed)
+        {
+            if (this.isDragging(entry.card()))
+            {
+                continue; // held by the mouse; the zone already shows it gone
+            }
+            int[] position = placedCardPosition(rect, entry);
+            boolean hovered = hitTest(mouseX, mouseY, position[0], position[1], CARD_WIDTH, CARD_HEIGHT);
+            this.drawCard(graphics, entry.card(), entry.card().isFaceUp(),
+                    position[0], position[1], CARD_WIDTH, CARD_HEIGHT, hovered);
+            cards.add(new RenderedCard(entry.card(), position[0], position[1], CARD_WIDTH, CARD_HEIGHT));
+        }
+        this.drawZoneLabel(graphics, zone, rect);
+    }
+
+    /** GRID zones show their slot cells so empty slots stay discoverable. */
+    private void renderGridSlots(GuiGraphics graphics, ZoneDefinition zone, Rect rect)
+    {
+        int slots = Math.max(1, zone.capacity());
+        float slotWidth = (float) rect.width() / slots;
+        for (int index = 0; index < slots; index++)
+        {
+            int slotLeft = rect.x() + (int) (index * slotWidth);
+            int slotRight = rect.x() + (int) ((index + 1) * slotWidth);
+            graphics.renderOutline(slotLeft + 1, rect.y() + 1,
+                    Math.max(1, slotRight - slotLeft - 2), Math.max(1, rect.height() - 2), COLOR_PLAYFIELD_EDGE);
+        }
+    }
+
+    /** Optional zone name hint, drawn only when the zone carries a label. */
+    private void drawZoneLabel(GuiGraphics graphics, ZoneDefinition zone, Rect rect)
+    {
+        Component label = zone.label();
+        if (label == null)
+        {
+            return;
+        }
+        graphics.drawString(this.font, label, rect.x() + 2, rect.y() - 10, COLOR_TEXT_DIM, true);
+    }
+
+    // Zone data accessors ----------------------------------------------------
+
+    /** STACK cards of a zone: built-in piles read their dedicated fields. */
+    private static List<CardInstance> stackOf(ZoneDefinition zone, @Nullable CardTableBlockEntity section,
+                                              TableGroupState groupState)
+    {
+        ResourceLocation id = zone.id();
+        if (TableLayoutDefinition.ZONE_DRAW_PILE.equals(id))
+        {
+            return groupState.getDrawPile();
+        }
+        if (TableLayoutDefinition.ZONE_DISCARD_PILE.equals(id))
+        {
+            return groupState.getDiscardPile();
+        }
+        ZoneState state = genericZoneState(id, section, groupState);
+        return state == null ? List.of() : state.stackCards();
+    }
+
+    /** FREE/GRID placements of a zone: the built-in free zone reads the surface. */
+    private static List<ZoneState.PlacedCard> placedOf(ZoneDefinition zone, @Nullable CardTableBlockEntity section,
+                                                       TableGroupState groupState)
+    {
+        ResourceLocation id = zone.id();
+        if (TableLayoutDefinition.ZONE_FREE.equals(id))
+        {
+            List<ZoneState.PlacedCard> out = new ArrayList<>();
+            if (section != null)
+            {
+                for (SurfaceZone.SurfaceCard card : section.getSectionState().getSurface().cards())
+                {
+                    out.add(new ZoneState.PlacedCard(card.card(), card.x(), card.y()));
+                }
+            }
+            return out;
+        }
+        ZoneState state = genericZoneState(id, section, groupState);
+        return state == null ? List.of() : state.placedCards();
+    }
+
+    @Nullable
+    private static ZoneState genericZoneState(ResourceLocation id, @Nullable CardTableBlockEntity section,
+                                              TableGroupState groupState)
+    {
+        return section == null
+                ? groupState.getSharedZones().get(id)
+                : section.getSectionState().getSeatZones().get(id);
+    }
+
+    /** Normalized zone rect → pixel rect inside a base (playfield or cell) rect. */
+    private static Rect scaledRect(int baseX, int baseY, int baseW, int baseH, ZoneDefinition zone)
+    {
+        int x = baseX + (int) (zone.x() * baseW);
+        int y = baseY + (int) (zone.y() * baseH);
+        int w = Math.max(1, (int) (zone.w() * baseW));
+        int h = Math.max(1, (int) (zone.h() * baseH));
+        return new Rect(x, y, w, h);
+    }
+
+    /** Zone-local normalized position → pixel top-left of the card inside the zone rect. */
+    private static int[] placedCardPosition(Rect rect, ZoneState.PlacedCard entry)
+    {
+        int cardX = rect.x() + 2 + (int) (entry.x() * Math.max(0, rect.width() - CARD_WIDTH - 4));
+        int cardY = rect.y() + 2 + (int) (entry.y() * Math.max(0, rect.height() - CARD_HEIGHT - 4));
+        return new int[] {cardX, cardY};
     }
 
     @Nullable
@@ -807,6 +973,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private void renderStatus(GuiGraphics graphics)
     {
         Component message = this.status;
+        if (message.getString().isEmpty() && this.layoutMissing)
+        {
+            // Bound layout vanished from the local registry: rendering degraded
+            // to the default. Only cosmetic — bad drops get rejected server-side.
+            message = Component.translatable("gui.cardtable.layout_missing");
+        }
         if (message.getString().isEmpty()
                 && !this.menu.isParticipant(this.minecraft.player)
                 && this.menu.getSeatCount() > 0
@@ -833,7 +1005,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return;
         }
-        List<Component> lines = List.of(
+        List<Component> lines = new ArrayList<>(List.of(
                 Component.translatable("gui.cardtable.members",
                         this.menu.getSeatedCount(), this.menu.getSeatCount()),
                 Component.translatable("gui.cardtable.version",
@@ -843,7 +1015,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 Component.translatable("gui.cardtable.draw_count",
                         masterEntity.getGroupState().getDrawPile().size()),
                 Component.translatable("gui.cardtable.discard_count",
-                        masterEntity.getGroupState().getDiscardPile().size()));
+                        masterEntity.getGroupState().getDiscardPile().size())));
+        TableGroupState debugState = masterEntity.getGroupState();
+        lines.add(Component.translatable("gui.cardtable.active_set",
+                debugState.getActiveSetId() != null ? debugState.getActiveSetId().toString() : "-"));
+        lines.add(Component.translatable("gui.cardtable.active_layout",
+                debugState.getActiveLayoutId() != null ? debugState.getActiveLayoutId().toString() : "-"));
         int y = this.height - 12;
         for (Component line : lines)
         {
@@ -855,31 +1032,23 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     // Interaction ------------------------------------------------------------
 
     /**
-     * The card under the mouse, if any: surface cards, own hand cards and
-     * both pile tops are draggable/castable targets. Later matches win so
-     * overlapping hand cards pick the visually topmost one.
+     * The card under the mouse, if any. Uses the frame's rendered card list
+     * (built by {@link #renderZones}), scanning topmost-first so overlapping
+     * cards pick what the player sees on top; then the own hand strip.
      */
     @Nullable
     private CardInstance hoveredCard(double mouseX, double mouseY)
     {
-        for (Cell cell : this.cells)
+        for (int index = this.renderedCards.size() - 1; index >= 0; index--)
         {
-            if (this.minecraft == null || this.minecraft.level == null
-                    || !(this.minecraft.level.getBlockEntity(cell.position()) instanceof CardTableBlockEntity section))
+            RenderedCard rendered = this.renderedCards.get(index);
+            if (this.isDragging(rendered.card()))
             {
                 continue;
             }
-            for (SurfaceZoneEntry entry : surfaceEntries(section))
+            if (hitTest(mouseX, mouseY, rendered.x(), rendered.y(), rendered.width(), rendered.height()))
             {
-                if (this.isDragging(entry.card()))
-                {
-                    continue;
-                }
-                int[] position = surfaceCardPosition(cell, entry);
-                if (hitTest(mouseX, mouseY, position[0], position[1], CARD_WIDTH, CARD_HEIGHT))
-                {
-                    return entry.card();
-                }
+                return rendered.card();
             }
         }
 
@@ -897,22 +1066,6 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 {
                     return hand.get(index);
                 }
-            }
-        }
-
-        TableGroupService.GroupView group = this.clientGroup();
-        TableGroupState groupState = group != null ? clientGroupState(group) : null;
-        if (groupState != null)
-        {
-            if (this.drawPileRect != null && this.drawPileRect.contains(mouseX, mouseY)
-                    && !groupState.getDrawPile().isEmpty())
-            {
-                return groupState.getDrawPile().get(groupState.getDrawPile().size() - 1);
-            }
-            if (this.discardPileRect != null && this.discardPileRect.contains(mouseX, mouseY)
-                    && !groupState.getDiscardPile().isEmpty())
-            {
-                return groupState.getDiscardPile().get(groupState.getDiscardPile().size() - 1);
             }
         }
         return null;
@@ -933,46 +1086,55 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         UUID instanceId = this.drag.instanceId();
 
+        // The hand strip keeps the highest priority (unchanged behavior).
         if (this.handStripRect != null && this.handStripRect.contains(mouseX, mouseY))
         {
             BlockPos ownSection = ownSeatPosition();
             if (ownSection != null)
             {
                 this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                        new ZoneRef(ZoneRef.Zone.HAND, ownSection), null));
+                        new ZoneRef(TableLayoutDefinition.ZONE_HAND, ownSection), null));
             }
             return;
         }
-        if (this.drawPileRect != null && this.drawPileRect.contains(mouseX, mouseY))
+        // Layout zones in reverse render order: the visually topmost zone wins.
+        for (int index = this.zoneHits.size() - 1; index >= 0; index--)
         {
-            this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                    new ZoneRef(ZoneRef.Zone.DRAW_PILE, null), null));
-            return;
-        }
-        if (this.discardPileRect != null && this.discardPileRect.contains(mouseX, mouseY))
-        {
-            this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                    new ZoneRef(ZoneRef.Zone.DISCARD_PILE, null), null));
-            return;
-        }
-        for (Cell cell : this.cells)
-        {
-            if (hitTest(mouseX, mouseY, cell.x(), cell.y(), cell.width(), cell.height()))
+            ZoneHit hit = this.zoneHits.get(index);
+            if (!hit.hitRect().contains(mouseX, mouseY))
             {
-                float x = normalizeDrop(mouseX, cell.x(), cell.width());
-                float y = normalizeDrop(mouseY, cell.y(), cell.height());
-                this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                        new ZoneRef(ZoneRef.Zone.SURFACE, cell.position()), new Vec2(x, y)));
-                return;
+                continue;
             }
+            ZoneDefinition zone = hit.zone();
+            if (zone.kind() == ZoneDefinition.Kind.STACK)
+            {
+                this.sendAction(new CardActionPacket.Action.Move(instanceId,
+                        new ZoneRef(zone.id(), hit.sectionPos()), null));
+            }
+            else
+            {
+                float x = normalizeDrop(mouseX, hit.rect().x(), hit.rect().width());
+                float y = normalizeDrop(mouseY, hit.rect().y(), hit.rect().height());
+                if (zone.kind() == ZoneDefinition.Kind.GRID)
+                {
+                    // Client-side quantization for instant feedback; the
+                    // server re-quantizes idempotently (same slot wins).
+                    float[] snapped = ZoneDefinition.quantizeGrid(x, y, zone.capacity());
+                    x = snapped[0];
+                    y = snapped[1];
+                }
+                this.sendAction(new CardActionPacket.Action.Move(instanceId,
+                        new ZoneRef(zone.id(), hit.sectionPos()), new Vec2(x, y)));
+            }
+            return;
         }
         // No valid target: drop cancels, the authoritative state is unchanged.
     }
 
-    private static float normalizeDrop(double value, int cellStart, int cellSize)
+    private static float normalizeDrop(double value, int zoneStart, int zoneSize)
     {
-        float usable = Math.max(1, cellSize - CARD_WIDTH - 4);
-        float normalized = (float) (value - cellStart - 2) / usable;
+        float usable = Math.max(1, zoneSize - CARD_WIDTH - 4);
+        float normalized = (float) (value - zoneStart - 2) / usable;
         return Math.max(0.0F, Math.min(1.0F, normalized));
     }
 
@@ -1016,7 +1178,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         if (keyCode == GLFW.GLFW_KEY_S)
         {
-            this.sendAction(new CardActionPacket.Action.Shuffle(new ZoneRef(ZoneRef.Zone.DRAW_PILE, null)));
+            this.sendAction(new CardActionPacket.Action.Shuffle(new ZoneRef(TableLayoutDefinition.ZONE_DRAW_PILE, null)));
             return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
@@ -1131,6 +1293,18 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return this.card.instanceId();
         }
+    }
+
+    /** One card as drawn this frame, with its pixel rect (drives hover hit-test). */
+    private record RenderedCard(CardInstance card, int x, int y, int width, int height)
+    {
+    }
+
+    /** One rendered zone instance: its definition, seat (null for SHARED),
+     *  the pixel rect drops normalize against, and the (possibly pile-spread)
+     *  rect that captures hover/drop. */
+    private record ZoneHit(ZoneDefinition zone, @Nullable BlockPos sectionPos, Rect rect, Rect hitRect)
+    {
     }
 
     /** Simple screen-space rectangle for hover/drop tests. */
