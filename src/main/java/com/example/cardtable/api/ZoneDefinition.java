@@ -78,7 +78,7 @@ public final class ZoneDefinition
         return new Builder(id);
     }
 
-    /** Unique zone id within its layout, e.g. {@code cardtable:draw_pile}. */
+    /** Unique zone id within its layout, e.g. {@code cardtable:my_tcg/deck}. */
     public ResourceLocation id()
     {
         return this.id;

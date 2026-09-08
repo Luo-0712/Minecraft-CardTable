@@ -101,7 +101,7 @@ public final class CardRegistry
         return Collections.unmodifiableCollection(sets.values());
     }
 
-    /** The layout with the given id; does not include the built-in default layout. */
+    /** The layout with the given id; the core ships no built-in fallback layout. */
     @Nullable
     public static TableLayoutDefinition getLayout(@Nullable ResourceLocation id)
     {

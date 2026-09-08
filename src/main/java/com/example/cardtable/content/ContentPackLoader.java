@@ -43,12 +43,16 @@ import java.util.zip.ZipFile;
  * {@link RegisterCardDefinitionsEvent} is posted on the mod bus so third-party
  * mods can register programmatic content, and the final snapshot is frozen
  * into {@link CardRegistry}. A single broken card entry is skipped with a
- * warning; a broken {@code pack.json} skips its whole pack.</p>
+ * warning; a broken {@code pack.json} skips its whole pack, and so does a
+ * pack without a usable {@code layout.json} — the core ships no built-in
+ * fallback layout, so a layout-less pack would leave its decks unplayable.</p>
  *
  * <p>Pack layout:</p>
  * <pre>
  * pack.json    { "format": 1, "id": "ns:name", "name": "...", "version": "...",
  *                "set": { "name": "...", "back": "back" } }
+ * layout.json  { "name": "...", "zones": [...], "initial": {"*": "deck"},
+ *                "actions": [...] }   (mandatory)
  * cards.json   [ { "id": "ace_of_spades", "set": "...", "display_name": {...},
  *                "front": "ace_of_spades", "back": "back", "sort": 0 }, ... ]
  * textures/    pack-relative PNGs referenced by front/back paths (file packs only)
@@ -64,8 +68,13 @@ public final class ContentPackLoader
     /** Dynamic-texture namespace under which file pack textures are registered client-side. */
     public static final String DYNAMIC_NAMESPACE = "cardtable_dyn";
 
-    /** Built-in packs shipped under {@code assets/cardtable/cardpacks/<name>/}. */
-    private static final List<String> BUILTIN_PACKS = List.of("standard");
+    /**
+     * Built-in packs shipped under {@code assets/cardtable/cardpacks/<name>/}.
+     * {@code standard} is the official example deck; {@code demo_poker} and
+     * {@code demo_battle} are the feasibility packs proving the empty-table
+     * refactor (classic vs. multi-pile + GRID + per-seat + custom keys).
+     */
+    private static final List<String> BUILTIN_PACKS = List.of("standard", "demo_poker", "demo_battle");
 
     /** Single texture size cap; larger files are treated as broken content. */
     private static final long MAX_TEXTURE_BYTES = 4L * 1024L * 1024L;
@@ -217,12 +226,47 @@ public final class ContentPackLoader
                                  CardDefinitionJsonCodec.TextureMapper textures,
                                  RegisterCardDefinitionsEvent event)
     {
-        List<String> canonicalLines = new ArrayList<>();
-        boolean setRegistered = false;
+        // layout.json is the load-bearing part of a pack: the core ships no
+        // built-in fallback layout, so a pack without a usable one is rejected
+        // whole — cards, set and layout all stay unregistered.
+        byte[] layoutJson = null;
         try
         {
-            String setLine = CardDefinitionJsonCodec.registerSet(meta, textures, event::register);
-            setRegistered = setLine != null;
+            layoutJson = source.read("layout.json");
+        }
+        catch (IOException exception)
+        {
+            LOGGER.error("Pack {}: failed to read layout.json: {}", meta.id(), exception.toString());
+        }
+        if (layoutJson == null)
+        {
+            LOGGER.error("Pack {} rejected: every pack must declare a layout.json", meta.id());
+            return;
+        }
+        CardDefinitionJsonCodec.ParsedLayout parsedLayout = null;
+        try
+        {
+            JsonElement root = JsonParser.parseString(new String(layoutJson, StandardCharsets.UTF_8));
+            parsedLayout = CardDefinitionJsonCodec.parseLayout(root, meta, LOGGER);
+        }
+        catch (Exception exception)
+        {
+            LOGGER.error("Pack {} rejected: broken layout.json: {}", meta.id(), exception.toString());
+        }
+        if (parsedLayout == null)
+        {
+            LOGGER.error("Pack {} rejected: layout.json has no usable zone", meta.id());
+            return;
+        }
+
+        List<String> canonicalLines = new ArrayList<>();
+        event.register(parsedLayout.definition());
+        canonicalLines.add(parsedLayout.canonicalLine());
+
+        // The pack set binds the pack layout: pack id == set id == layout id.
+        try
+        {
+            String setLine = CardDefinitionJsonCodec.registerSet(meta, textures, meta.id(), event::register);
             if (setLine != null)
             {
                 canonicalLines.add(setLine);
@@ -231,44 +275,6 @@ public final class ContentPackLoader
         catch (Exception exception)
         {
             LOGGER.warn("Pack {}: skipping broken set declaration: {}", meta.id(), exception.toString());
-        }
-
-        // layout.json (format 2): registered under the pack id and implicitly
-        // referenced by the pack set. Without a set there is nothing to hang
-        // the layout on, so it is ignored with a warning.
-        byte[] layoutJson = null;
-        try
-        {
-            layoutJson = source.read("layout.json");
-        }
-        catch (IOException exception)
-        {
-            LOGGER.warn("Pack {}: failed to read layout.json: {}", meta.id(), exception.toString());
-        }
-        if (layoutJson != null)
-        {
-            if (!setRegistered)
-            {
-                LOGGER.warn("Pack {}: layout.json ignored because the pack declares no set", meta.id());
-            }
-            else
-            {
-                try
-                {
-                    JsonElement root = JsonParser.parseString(new String(layoutJson, StandardCharsets.UTF_8));
-                    CardDefinitionJsonCodec.ParsedLayout parsed = CardDefinitionJsonCodec.parseLayout(
-                            root, meta, LOGGER);
-                    if (parsed != null)
-                    {
-                        event.register(parsed.definition());
-                        canonicalLines.add(parsed.canonicalLine());
-                    }
-                }
-                catch (Exception exception)
-                {
-                    LOGGER.warn("Pack {}: skipping broken layout.json: {}", meta.id(), exception.toString());
-                }
-            }
         }
 
         int accepted = 0;

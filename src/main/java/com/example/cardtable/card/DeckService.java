@@ -11,6 +11,7 @@ import com.example.cardtable.table.TableGroupService;
 import com.example.cardtable.table.TableGroupState;
 import com.example.cardtable.table.TableSectionState;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -19,16 +20,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 /**
  * Server-side authority for the table's deck slot: inserting a deck item
- * fills the group draw pile with one instance of every card in its set;
- * taking it back out atomically reclaims every card of that deck from every
- * zone (piles, surfaces and hidden hands) so a deck never leaves cards
- * stranded on the table.
+ * binds its set's layout, instantiates every zone the layout declares (the
+ * kind == STACK convention marks the piles) and loads one instance of every
+ * card into the layout's stock pile; taking the deck back out atomically
+ * reclaims every card of that deck from every zone (piles, surfaces and
+ * hidden hands) so a deck never leaves cards stranded on the table.
  *
  * <p>All mutations bump the group version and go through
  * {@link TableGroupService#syncGroup}, reusing the existing block entity
@@ -72,53 +76,83 @@ public final class DeckService
             return false; // One deck at a time; the slot state is authoritative.
         }
 
-        // Cards enter face-down in set order; the pile top is the last entry.
-        for (CardDefinition definition : CardRegistry.cardsInSet(deckId.get()))
+        // Layout binding: the set decides the layout, and a set whose layout
+        // is missing or unregistered is rejected — the core ships no built-in
+        // fallback layout, so there is nothing sensible to degrade to.
+        ResourceLocation layoutId = set.layout();
+        TableLayoutDefinition layout = layoutId == null ? null : CardRegistry.getLayout(layoutId);
+        if (layout == null)
         {
-            groupState.getDrawPile().add(new CardInstance(definition.id()));
+            LOGGER.warn("Deck insert rejected: set {} references unknown layout {}", set.id(), layoutId);
+            notifyActor(actor, "gui.cardtable.deck_layout_missing", set.id());
+            return false;
+        }
+        TableLayoutDefinition normalizedLayout = layout.normalized();
+        if (normalizedLayout.initialZoneFor(deckId.get()) == null)
+        {
+            LOGGER.warn("Deck insert rejected: layout {} declares no usable stock pile",
+                    normalizedLayout.id());
+            notifyActor(actor, "gui.cardtable.deck_stock_missing", normalizedLayout.id());
+            return false;
+        }
+
+        if (!loadDeck(groupState, deckId.get(), normalizedLayout, collectSeats(level, group)))
+        {
+            return false;
         }
         groupState.setDeckStack(deckStack.copy());
-        // Layout binding (D1/D2): the set decides the layout. A missing or
-        // unregistered layout degrades to the built-in default with a warning
-        // instead of rejecting the deck.
-        ResourceLocation layoutId = set.layout();
-        if (layoutId != null && CardRegistry.getLayout(layoutId) == null)
-        {
-            LOGGER.warn("Set {} references unknown layout {}; falling back to {}",
-                    set.id(), layoutId, TableLayoutDefinition.DEFAULT_LAYOUT_ID);
-            layoutId = null;
-        }
-        groupState.setLayoutBinding(deckId.get(), layoutId);
-        ensureZoneContainers(level, group, groupState, layoutId);
         groupState.bumpVersion();
         TableGroupService.syncGroup(level, group);
         return true;
     }
 
     /**
-     * Instantiates the generic zone containers (shared + per-seat) for the
-     * active layout. Built-in zones keep their dedicated fields and are never
-     * created here; unknown layout ids (should not happen after the insert
-     * check) simply create nothing.
+     * Pure core of the deck insert, shared with the feasibility test: binds
+     * the set/layout, instantiates a container for every declared zone per
+     * the structural conventions and loads the whole deck face-down into the
+     * layout's stock pile (set order; the pile top is the last entry).
+     *
+     * @return {@code false} when the layout names no shared stock pile or the
+     *         state diverges from the layout (nothing is mutated then)
      */
-    private static void ensureZoneContainers(Level level, TableGroupService.GroupView group,
-                                             TableGroupState groupState, @Nullable ResourceLocation layoutId)
+    static boolean loadDeck(TableGroupState groupState, ResourceLocation deckId,
+                            TableLayoutDefinition normalizedLayout, List<TableSectionState> seats)
     {
-        TableLayoutDefinition layout = layoutId == null
-                ? TableLayoutDefinition.defaultLayout() : CardRegistry.getLayout(layoutId);
-        if (layout == null)
+        ZoneDefinition stock = normalizedLayout.initialZoneFor(deckId);
+        if (stock == null || stock.scope() != ZoneDefinition.Scope.SHARED)
         {
-            return;
+            return false; // the whole deck needs one shared pile to land in
         }
-        TableLayoutDefinition normalizedLayout = layout.normalized();
-        for (var zone : normalizedLayout.zones())
+        groupState.setLayoutBinding(deckId, normalizedLayout.id());
+        instantiateZoneContainers(groupState, normalizedLayout, seats);
+        ZoneState container = groupState.getSharedZones().get(stock.id());
+        if (container == null || container.storage() != ZoneState.Storage.STACK)
         {
-            if (TableLayoutDefinition.ZONE_DRAW_PILE.equals(zone.id())
-                    || TableLayoutDefinition.ZONE_DISCARD_PILE.equals(zone.id())
-                    || TableLayoutDefinition.ZONE_FREE.equals(zone.id())
+            return false; // state/layout divergence: stay safe
+        }
+        for (CardDefinition definition : CardRegistry.cardsInSet(deckId))
+        {
+            container.addToStackTop(new CardInstance(definition.id()));
+        }
+        return true;
+    }
+
+    /**
+     * Instantiates the generic zone containers (shared + per-seat) for the
+     * active layout. The reserved hand/free zones keep their dedicated
+     * containers (the per-seat hand list and the per-block surface) and are
+     * never created here.
+     */
+    private static void instantiateZoneContainers(TableGroupState groupState,
+                                                  TableLayoutDefinition normalizedLayout,
+                                                  List<TableSectionState> seats)
+    {
+        for (ZoneDefinition zone : normalizedLayout.zones())
+        {
+            if (TableLayoutDefinition.ZONE_FREE.equals(zone.id())
                     || TableLayoutDefinition.ZONE_HAND.equals(zone.id()))
             {
-                continue; // built-ins keep their dedicated containers
+                continue; // reserved zones keep their dedicated containers
             }
             if (zone.scope() == ZoneDefinition.Scope.SHARED)
             {
@@ -126,15 +160,34 @@ public final class DeckService
             }
             else
             {
-                for (BlockPos pos : group.positions())
+                for (TableSectionState seat : seats)
                 {
-                    if (level.getBlockEntity(pos) instanceof CardTableBlockEntity section)
-                    {
-                        section.getSectionState().getSeatZones()
-                                .put(zone.id(), ZoneState.stackFor(zone.kind()));
-                    }
+                    seat.getSeatZones().put(zone.id(), ZoneState.stackFor(zone.kind()));
                 }
             }
+        }
+    }
+
+    /** Every section state of the table group, in the group's position order. */
+    private static List<TableSectionState> collectSeats(Level level, TableGroupService.GroupView group)
+    {
+        List<TableSectionState> seats = new ArrayList<>();
+        for (BlockPos pos : group.positions())
+        {
+            if (level.getBlockEntity(pos) instanceof CardTableBlockEntity section)
+            {
+                seats.add(section.getSectionState());
+            }
+        }
+        return seats;
+    }
+
+    /** Surface hint for a rejected deck insert; the server log stays authoritative. */
+    private static void notifyActor(@Nullable ServerPlayer actor, String key, Object... args)
+    {
+        if (actor != null)
+        {
+            actor.sendSystemMessage(Component.translatable(key, args));
         }
     }
 
@@ -165,9 +218,6 @@ public final class DeckService
         Set<ResourceLocation> reclaimedIds = deckId.isPresent()
                 ? idsOfSet(deckId.get()) : Set.of();
 
-        groupState.getDrawPile().removeIf(card -> reclaimedIds.contains(card.definitionId()));
-        groupState.getDiscardPile().removeIf(card -> reclaimedIds.contains(card.definitionId()));
-
         for (var pos : group.positions())
         {
             if (level.getBlockEntity(pos) instanceof CardTableBlockEntity section)
@@ -187,7 +237,8 @@ public final class DeckService
         groupState.getSharedZones().values().forEach(zone -> zone.removeIfDefinition(reclaimedIds));
 
         groupState.setDeckStack(ItemStack.EMPTY);
-        // D2: taking the deck out resets the table to the classic empty state.
+        // Taking the deck out resets the table to the empty state: no layout
+        // binding, no declared containers, just the bare surface and hands.
         groupState.resetLayoutState();
         for (var pos : group.positions())
         {

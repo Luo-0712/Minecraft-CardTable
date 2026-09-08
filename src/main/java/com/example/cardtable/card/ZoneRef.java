@@ -7,9 +7,9 @@ import javax.annotation.Nullable;
 
 /**
  * Locates a card zone by layout id plus optional seat section. The id is the
- * open, content-driven address (e.g. {@code cardtable:draw_pile} for the
- * built-in piles, a pack-relative id like {@code cardtable:my_tcg/bench} for
- * layout zones); the section position selects the seat instance for
+ * open, content-driven address (a pack-relative id like
+ * {@code cardtable:my_tcg/bench}, or the reserved {@code cardtable:free}
+ * surface); the section position selects the seat instance for
  * PER_SEAT zones and must be {@code null} for SHARED zones. The server
  * re-resolves and re-validates both parts authoritatively.
  */

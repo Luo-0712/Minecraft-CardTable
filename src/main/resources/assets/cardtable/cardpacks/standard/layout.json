@@ -1,0 +1,49 @@
+{
+  "name": "标准扑克牌桌",
+  "zones": [
+    {
+      "id": "deck",
+      "kind": "stack",
+      "scope": "shared",
+      "rect": [0.02, 0.02, 0.06, 0.12],
+      "label": { "translate": "zone.cardtable.standard.deck" }
+    },
+    {
+      "id": "discard",
+      "kind": "stack",
+      "scope": "shared",
+      "rect": [0.92, 0.86, 0.06, 0.12],
+      "label": { "translate": "zone.cardtable.standard.discard" }
+    }
+  ],
+  "initial": { "*": "deck" },
+  "actions": [
+    {
+      "id": "draw",
+      "type": "draw",
+      "source": "deck",
+      "amount": 1,
+      "key": "key.keyboard.d",
+      "label": { "translate": "action.cardtable.standard.draw" }
+    },
+    {
+      "id": "shuffle",
+      "type": "shuffle",
+      "source": "deck",
+      "key": "key.keyboard.s",
+      "label": { "translate": "action.cardtable.standard.shuffle" }
+    },
+    {
+      "id": "flip",
+      "type": "flip",
+      "key": "key.keyboard.f",
+      "label": { "translate": "action.cardtable.standard.flip" }
+    },
+    {
+      "id": "rotate",
+      "type": "rotate",
+      "key": "key.keyboard.r",
+      "label": { "translate": "action.cardtable.standard.rotate" }
+    }
+  ]
+}

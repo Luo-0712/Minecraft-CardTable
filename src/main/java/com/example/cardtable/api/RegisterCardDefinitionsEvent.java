@@ -42,7 +42,11 @@ public class RegisterCardDefinitionsEvent extends Event
         }
     }
 
-    /** Registers one table layout; throws if the id was already taken in this event. */
+    /**
+     * Registers one table layout (its action table and stock mapping travel
+     * with it — no separate registration channel exists); throws if the id
+     * was already taken in this event.
+     */
     public void register(TableLayoutDefinition layout)
     {
         java.util.Objects.requireNonNull(layout, "layout");

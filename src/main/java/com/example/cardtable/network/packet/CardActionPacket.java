@@ -34,12 +34,13 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
         {
         }
 
-        /** Draws {@code count} cards from the draw pile top into the actor's hand. */
-        record Draw(int count) implements Action
-        {
-        }
-
-        record Shuffle(ZoneRef zone) implements Action
+        /**
+         * Runs one action of the active layout's action table through its
+         * generic primitive. {@code instanceId} is only used by the
+         * card-targeted primitives (FLIP/ROTATE) and must be {@code null}
+         * for pile-targeted ones (DRAW/SHUFFLE).
+         */
+        record Perform(ResourceLocation actionId, @Nullable UUID instanceId) implements Action
         {
         }
     }
@@ -47,8 +48,7 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
     private static final byte KIND_MOVE = 0;
     private static final byte KIND_FLIP = 1;
     private static final byte KIND_ROTATE = 2;
-    private static final byte KIND_DRAW = 3;
-    private static final byte KIND_SHUFFLE = 4;
+    private static final byte KIND_PERFORM = 3;
 
     public static void encode(CardActionPacket packet, FriendlyByteBuf buffer)
     {
@@ -71,16 +71,15 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
             buffer.writeByte(KIND_ROTATE);
             buffer.writeUUID(rotate.instanceId());
         }
-        else if (action instanceof Action.Draw draw)
+        else if (action instanceof Action.Perform perform)
         {
-            buffer.writeByte(KIND_DRAW);
-            buffer.writeVarInt(draw.count());
-        }
-        else if (action instanceof Action.Shuffle shuffle)
-        {
-            buffer.writeByte(KIND_SHUFFLE);
-            // Shuffle targets any STACK zone; PER_SEAT ones need the section.
-            writeZone(buffer, shuffle.zone(), true);
+            buffer.writeByte(KIND_PERFORM);
+            buffer.writeResourceLocation(perform.actionId());
+            buffer.writeBoolean(perform.instanceId() != null);
+            if (perform.instanceId() != null)
+            {
+                buffer.writeUUID(perform.instanceId());
+            }
         }
     }
 
@@ -98,8 +97,12 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
             }
             case KIND_FLIP -> new Action.Flip(buffer.readUUID());
             case KIND_ROTATE -> new Action.Rotate(buffer.readUUID());
-            case KIND_DRAW -> new Action.Draw(Math.max(1, Math.min(10, buffer.readVarInt())));
-            case KIND_SHUFFLE -> new Action.Shuffle(readZone(buffer, true));
+            case KIND_PERFORM ->
+            {
+                ResourceLocation actionId = buffer.readResourceLocation();
+                UUID instanceId = buffer.readBoolean() ? buffer.readUUID() : null;
+                yield new Action.Perform(actionId, instanceId);
+            }
             default -> throw new IllegalStateException("Unknown card action kind: " + kind);
         };
         return new CardActionPacket(tablePosition, action);

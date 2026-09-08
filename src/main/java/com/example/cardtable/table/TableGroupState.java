@@ -1,6 +1,5 @@
 package com.example.cardtable.table;
 
-import com.example.cardtable.card.CardInstance;
 import com.example.cardtable.card.ZoneState;
 import com.example.cardtable.item.DeckItem;
 import net.minecraft.nbt.CompoundTag;
@@ -10,9 +9,7 @@ import net.minecraft.world.item.ItemStack;
 
 import javax.annotation.Nullable;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -22,17 +19,15 @@ import java.util.UUID;
  * copy so clients can read a consistent group view from any block.
  *
  * <p>Besides identity and version it owns the shared card containers: the
- * draw pile filled by the inserted deck item, the discard pile, the deck
- * item itself (so the table "remembers" which deck is in play) and the
- * layout-declared SHARED zone instances. Membership lives in the per-block
- * {@link TableSectionState}.</p>
+ * deck item itself (so the table "remembers" which deck is in play) and the
+ * generic SHARED zone instances declared by the active layout — piles are
+ * just the layout's STACK zones per the kind == STACK convention. Membership
+ * lives in the per-block {@link TableSectionState}.</p>
  */
 public final class TableGroupState
 {
     private static final String TABLE_ID_TAG = "TableId";
     private static final String VERSION_TAG = "Version";
-    private static final String DRAW_PILE_TAG = "DrawPile";
-    private static final String DISCARD_PILE_TAG = "DiscardPile";
     private static final String DECK_TAG = "DeckItem";
     private static final String ACTIVE_SET_TAG = "ActiveSet";
     private static final String ACTIVE_LAYOUT_TAG = "ActiveLayout";
@@ -41,9 +36,6 @@ public final class TableGroupState
     private final UUID tableId;
     private long version;
 
-    /** Bottom-to-top order: the last entry is the top of the pile. */
-    private final List<CardInstance> drawPile = new ArrayList<>();
-    private final List<CardInstance> discardPile = new ArrayList<>();
     // Held as serialized NBT instead of an ItemStack field: an ItemStack
     // field initializer would drag the item registry into every class-load
     // (including plain unit tests), while save/load only need this tag.
@@ -51,7 +43,7 @@ public final class TableGroupState
     private CompoundTag deckStackTag;
 
     // Layout-driven state: which set/layout this table runs and the generic
-    // SHARED zone instances it declared. Null = classic table (no layout).
+    // SHARED zone instances it declared. Null = no deck bound to this table.
     @Nullable
     private ResourceLocation activeSetId;
     @Nullable
@@ -70,8 +62,6 @@ public final class TableGroupState
     public TableGroupState(TableGroupState source)
     {
         this(source.tableId, source.version);
-        this.drawPile.addAll(source.drawPile);
-        this.discardPile.addAll(source.discardPile);
         this.deckStackTag = source.deckStackTag == null ? null : source.deckStackTag.copy();
         this.activeSetId = source.activeSetId;
         this.activeLayoutId = source.activeLayoutId;
@@ -88,8 +78,9 @@ public final class TableGroupState
         UUID tableId = tag.hasUUID(TABLE_ID_TAG) ? tag.getUUID(TABLE_ID_TAG) : UUID.randomUUID();
         long version = tag.contains(VERSION_TAG) ? tag.getLong(VERSION_TAG) : 0L;
         TableGroupState state = new TableGroupState(tableId, version);
-        state.drawPile.addAll(CardInstance.loadAll(tag.getList(DRAW_PILE_TAG, Tag.TAG_COMPOUND)));
-        state.discardPile.addAll(CardInstance.loadAll(tag.getList(DISCARD_PILE_TAG, Tag.TAG_COMPOUND)));
+        // Legacy saves carrying the pre-refactor DrawPile/DiscardPile tags are
+        // read no further: those built-in piles no longer exist, so their
+        // contents are dropped and the rest of the table migrates intact.
         state.deckStackTag = tag.contains(DECK_TAG, Tag.TAG_COMPOUND) ? tag.getCompound(DECK_TAG).copy() : null;
         if (tag.contains(ACTIVE_SET_TAG, Tag.TAG_STRING))
         {
@@ -164,8 +155,6 @@ public final class TableGroupState
         CompoundTag tag = new CompoundTag();
         tag.putUUID(TABLE_ID_TAG, this.tableId);
         tag.putLong(VERSION_TAG, this.version);
-        tag.put(DRAW_PILE_TAG, CardInstance.saveAll(this.drawPile));
-        tag.put(DISCARD_PILE_TAG, CardInstance.saveAll(this.discardPile));
         if (this.deckStackTag != null)
         {
             tag.put(DECK_TAG, this.deckStackTag.copy());
@@ -204,18 +193,6 @@ public final class TableGroupState
 
     // Shared card containers -------------------------------------------------
 
-    /** Bottom-to-top order: the last entry is the top of the pile. */
-    public List<CardInstance> getDrawPile()
-    {
-        return this.drawPile;
-    }
-
-    /** Bottom-to-top order: the last entry is the top of the pile. */
-    public List<CardInstance> getDiscardPile()
-    {
-        return this.discardPile;
-    }
-
     /** The deck item currently inserted into the table's deck slot, if any. */
     public ItemStack getDeckStack()
     {
@@ -225,24 +202,6 @@ public final class TableGroupState
     public void setDeckStack(ItemStack deckStack)
     {
         this.deckStackTag = deckStack == null || deckStack.isEmpty() ? null : deckStack.save(new CompoundTag());
-    }
-
-    /** Bottom-to-top order: the added card becomes the top of the pile. */
-    public void addToDrawPileTop(CardInstance card)
-    {
-        this.drawPile.add(card);
-    }
-
-    @Nullable
-    public CardInstance takeFromDrawPileTop()
-    {
-        return this.drawPile.isEmpty() ? null : this.drawPile.remove(this.drawPile.size() - 1);
-    }
-
-    /** Bottom-to-top order: the added card becomes the top of the pile. */
-    public void addToDiscardPileTop(CardInstance card)
-    {
-        this.discardPile.add(card);
     }
 
     // Layout-driven state ------------------------------------------------------

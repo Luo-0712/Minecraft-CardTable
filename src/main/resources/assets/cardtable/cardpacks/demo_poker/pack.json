@@ -1,0 +1,10 @@
+{
+  "format": 2,
+  "id": "cardtable:demo_poker",
+  "name": "可行性验证·经典扑克",
+  "version": "1.0.0",
+  "set": {
+    "name": "Demo Poker",
+    "back": "back"
+  }
+}

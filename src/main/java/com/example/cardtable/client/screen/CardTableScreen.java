@@ -4,6 +4,7 @@ import com.example.cardtable.CardTableMod;
 import com.example.cardtable.api.CardDefinition;
 import com.example.cardtable.api.CardRegistry;
 import com.example.cardtable.api.CardSetDefinition;
+import com.example.cardtable.api.TableActionDefinition;
 import com.example.cardtable.api.TableLayoutDefinition;
 import com.example.cardtable.api.ZoneDefinition;
 import com.example.cardtable.block.entity.CardTableBlockEntity;
@@ -21,6 +22,7 @@ import com.example.cardtable.card.ZoneRef;
 import com.example.cardtable.table.TableGraph;
 import com.example.cardtable.table.TableGroupService;
 import com.example.cardtable.table.TableGroupState;
+import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.gui.GuiGraphics;
@@ -457,24 +459,25 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     /**
      * Resolves the layout the table currently runs against the local registry.
-     * A null binding is the classic default; a binding that vanished from the
-     * registry degrades to the default and flags {@link #layoutMissing} so the
+     * A null binding is the bare table (no deck); a binding that vanished from
+     * the registry yields {@code null} and flags {@link #layoutMissing} so the
      * status line can warn (bad drops are then rejected server-side, so this
      * only ever affects appearance).
      */
+    @Nullable
     private TableLayoutDefinition resolveActiveLayout(TableGroupState groupState)
     {
         this.layoutMissing = false;
         ResourceLocation layoutId = groupState.getActiveLayoutId();
         if (layoutId == null)
         {
-            return TableLayoutDefinition.defaultLayout();
+            return null; // no deck bound: the bare table
         }
         TableLayoutDefinition layout = CardRegistry.getLayout(layoutId);
         if (layout == null)
         {
             this.layoutMissing = true;
-            return TableLayoutDefinition.defaultLayout();
+            return null;
         }
         return layout.normalized();
     }
@@ -507,6 +510,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         for (Cell cell : this.cells)
         {
             graphics.renderOutline(cell.x(), cell.y(), cell.width(), cell.height(), COLOR_PLAYFIELD_EDGE);
+        }
+        if (layout == null)
+        {
+            return; // no deck bound or the layout is missing: just the bare cells
         }
 
         int playLeft = playfieldLeft();
@@ -621,24 +628,15 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     // Zone data accessors ----------------------------------------------------
 
-    /** STACK cards of a zone: built-in piles read their dedicated fields. */
+    /** STACK cards of a zone: every pile is a layout-declared generic zone. */
     private static List<CardInstance> stackOf(ZoneDefinition zone, @Nullable CardTableBlockEntity section,
                                               TableGroupState groupState)
     {
-        ResourceLocation id = zone.id();
-        if (TableLayoutDefinition.ZONE_DRAW_PILE.equals(id))
-        {
-            return groupState.getDrawPile();
-        }
-        if (TableLayoutDefinition.ZONE_DISCARD_PILE.equals(id))
-        {
-            return groupState.getDiscardPile();
-        }
-        ZoneState state = genericZoneState(id, section, groupState);
+        ZoneState state = genericZoneState(zone.id(), section, groupState);
         return state == null ? List.of() : state.stackCards();
     }
 
-    /** FREE/GRID placements of a zone: the built-in free zone reads the surface. */
+    /** FREE/GRID placements of a zone: the reserved free zone reads the surface. */
     private static List<ZoneState.PlacedCard> placedOf(ZoneDefinition zone, @Nullable CardTableBlockEntity section,
                                                        TableGroupState groupState)
     {
@@ -1045,28 +1043,68 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return;
         }
+        TableGroupState debugState = masterEntity.getGroupState();
         List<Component> lines = new ArrayList<>(List.of(
                 Component.translatable("gui.cardtable.members",
                         this.menu.getSeatedCount(), this.menu.getSeatCount()),
-                Component.translatable("gui.cardtable.version",
-                        masterEntity.getGroupState().getVersion()),
+                Component.translatable("gui.cardtable.version", debugState.getVersion()),
                 Component.translatable("gui.cardtable.table_id",
-                        masterEntity.getGroupState().getTableId().toString().substring(0, 8)),
-                Component.translatable("gui.cardtable.draw_count",
-                        masterEntity.getGroupState().getDrawPile().size()),
-                Component.translatable("gui.cardtable.discard_count",
-                        masterEntity.getGroupState().getDiscardPile().size())));
-        TableGroupState debugState = masterEntity.getGroupState();
-        lines.add(Component.translatable("gui.cardtable.active_set",
-                debugState.getActiveSetId() != null ? debugState.getActiveSetId().toString() : "-"));
-        lines.add(Component.translatable("gui.cardtable.active_layout",
-                debugState.getActiveLayoutId() != null ? debugState.getActiveLayoutId().toString() : "-"));
+                        debugState.getTableId().toString().substring(0, 8)),
+                Component.translatable("gui.cardtable.active_set",
+                        debugState.getActiveSetId() != null ? debugState.getActiveSetId().toString() : "-"),
+                Component.translatable("gui.cardtable.active_layout",
+                        debugState.getActiveLayoutId() != null ? debugState.getActiveLayoutId().toString() : "-")));
+        appendLayoutDebug(lines, debugState);
         int y = this.height - 12;
         for (Component line : lines)
         {
             graphics.drawString(this.font, line, this.width - 4 - this.font.width(line), y, COLOR_TEXT_DIM, true);
             y -= 12;
         }
+    }
+
+    // Zone counts plus "key → action" hints, purely informational: the debug
+    // readout follows whatever the pack declared instead of the old fixed
+    // draw/discard counters. Resolves the layout locally so the render flag
+    // (owned by renderZones) is untouched.
+    private void appendLayoutDebug(List<Component> lines, TableGroupState debugState)
+    {
+        ResourceLocation layoutId = debugState.getActiveLayoutId();
+        TableLayoutDefinition layout = layoutId == null ? null : CardRegistry.getLayout(layoutId);
+        if (layout == null)
+        {
+            return;
+        }
+        TableLayoutDefinition normalized = layout.normalized();
+        for (ZoneDefinition zone : normalized.zones())
+        {
+            if (TableLayoutDefinition.ZONE_FREE.equals(zone.id())
+                    || TableLayoutDefinition.ZONE_HAND.equals(zone.id())
+                    || zone.scope() != ZoneDefinition.Scope.SHARED)
+            {
+                continue; // the surface and hands keep their own readouts
+            }
+            ZoneState state = debugState.getSharedZones().get(zone.id());
+            lines.add(Component.literal(zoneDisplayName(zone) + ": " + (state == null ? 0 : state.size())));
+        }
+        for (TableActionDefinition action : normalized.actions())
+        {
+            if (action.key() != null)
+            {
+                lines.add(Component.translatable("gui.cardtable.action_hint",
+                        InputConstants.getKey(action.key()).getDisplayName(), actionDisplayName(action)));
+            }
+        }
+    }
+
+    private static Component zoneDisplayName(ZoneDefinition zone)
+    {
+        return zone.label() != null ? zone.label() : Component.literal("#" + zone.id().getPath());
+    }
+
+    private static Component actionDisplayName(TableActionDefinition action)
+    {
+        return action.label() != null ? action.label() : Component.literal("#" + action.id().getPath());
     }
 
     // Interaction ------------------------------------------------------------
@@ -1207,13 +1245,14 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         NetworkHandler.CHANNEL.sendToServer(new CardActionPacket(this.menu.getTablePosition(), action));
     }
 
-    // Keyboard actions: F flip, R rotate, D draw, S shuffle.
-    // All validated server-side.
+    // Keyboard actions come from the active layout's action table (the pack
+    // decides which keys do what); the core hardcodes none of them. Every
+    // request is validated server-side before it touches any state.
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers)
     {
         // Rebindable backpack toggle (default B). Checked first so a custom
-        // binding never collides with the hardcoded card shortcuts below.
+        // binding never collides with the pack-declared action keys below.
         if (ModKeyBindings.TOGGLE_INVENTORY.matches(keyCode, scanCode))
         {
             this.toggleInventory();
@@ -1224,35 +1263,53 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             this.showDebugInfo = !this.showDebugInfo;
             return true;
         }
-        if (keyCode == GLFW.GLFW_KEY_F && this.drag == null)
+        TableGroupService.GroupView group = this.clientGroup();
+        TableGroupState groupState = group != null ? clientGroupState(group) : null;
+        TableLayoutDefinition layout = groupState == null ? null : resolveActiveLayout(groupState);
+        if (layout != null)
         {
-            CardInstance hovered = hoveredCard(this.lastMouseX, this.lastMouseY);
-            if (hovered != null)
+            for (TableActionDefinition action : layout.actions())
             {
-                this.sendAction(new CardActionPacket.Action.Flip(hovered.instanceId()));
-                return true;
+                if (action.key() != null && matchesKey(action.key(), keyCode, scanCode))
+                {
+                    this.sendDeclaredAction(action);
+                    return true;
+                }
             }
-        }
-        if (keyCode == GLFW.GLFW_KEY_R && this.drag == null)
-        {
-            CardInstance hovered = hoveredCard(this.lastMouseX, this.lastMouseY);
-            if (hovered != null)
-            {
-                this.sendAction(new CardActionPacket.Action.Rotate(hovered.instanceId()));
-                return true;
-            }
-        }
-        if (keyCode == GLFW.GLFW_KEY_D)
-        {
-            this.sendAction(new CardActionPacket.Action.Draw(1));
-            return true;
-        }
-        if (keyCode == GLFW.GLFW_KEY_S)
-        {
-            this.sendAction(new CardActionPacket.Action.Shuffle(new ZoneRef(TableLayoutDefinition.ZONE_DRAW_PILE, null)));
-            return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    /** GLFW key-name matching for pack-declared action keys. */
+    private static boolean matchesKey(String keyName, int keyCode, int scanCode)
+    {
+        InputConstants.Key bound = InputConstants.getKey(keyName);
+        if (bound.getType() == InputConstants.Type.KEYSYM)
+        {
+            return bound.getValue() == keyCode;
+        }
+        return bound.getType() == InputConstants.Type.SCANCODE && bound.getValue() == scanCode;
+    }
+
+    /**
+     * Performs one declared action: card-targeted primitives (flip/rotate)
+     * attach the card under the cursor, pile-targeted ones (draw/shuffle)
+     * carry no instance. Nothing is sent when a needed card is missing.
+     */
+    private void sendDeclaredAction(TableActionDefinition action)
+    {
+        if (action.type() == TableActionDefinition.Type.FLIP
+                || action.type() == TableActionDefinition.Type.ROTATE)
+        {
+            CardInstance hovered = hoveredCard(this.lastMouseX, this.lastMouseY);
+            if (hovered == null)
+            {
+                return;
+            }
+            this.sendAction(new CardActionPacket.Action.Perform(action.id(), hovered.instanceId()));
+            return;
+        }
+        this.sendAction(new CardActionPacket.Action.Perform(action.id(), null));
     }
 
     @Override

@@ -1,6 +1,7 @@
 package com.example.cardtable.card;
 
 import com.example.cardtable.api.CardRegistry;
+import com.example.cardtable.api.TableActionDefinition;
 import com.example.cardtable.api.TableLayoutDefinition;
 import com.example.cardtable.api.ZoneDefinition;
 import com.example.cardtable.block.entity.CardTableBlockEntity;
@@ -12,6 +13,7 @@ import com.example.cardtable.table.TableSectionState;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
 
 import javax.annotation.Nullable;
@@ -26,9 +28,13 @@ import java.util.UUID;
  * version once, and syncs through the existing block entity path plus the
  * directed hand packets. Clients never mutate zone state themselves.
  *
- * <p>Ownership rules keep the sandbox honest: shared zones (piles, surfaces)
- * are operable by any seated player, while a hand belongs to its occupant
- * only.</p>
+ * <p>The core knows no game rules: the reserved {@code free}/{@code hand}
+ * zones keep their dedicated containers, everything else must be declared by
+ * the active layout, and the {@code Perform} action runs one entry of the
+ * layout's action table through a generic primitive (draw N from a stack,
+ * shuffle a stack, flip/rotate a card). Ownership rules keep the sandbox
+ * honest: shared zones are operable by any seated player, while a hand
+ * belongs to its occupant only.</p>
  */
 public final class CardActionService
 {
@@ -100,13 +106,9 @@ public final class CardActionService
             located.card().rotate();
             return true;
         }
-        if (action instanceof CardActionPacket.Action.Draw draw)
+        if (action instanceof CardActionPacket.Action.Perform perform)
         {
-            return drawCards(level, group, actor, draw.count());
-        }
-        if (action instanceof CardActionPacket.Action.Shuffle shuffle)
-        {
-            return shuffle(level, group, shuffle);
+            return performAction(level, group, actor, perform);
         }
         return false;
     }
@@ -130,25 +132,9 @@ public final class CardActionService
         float x = move.surfacePos() != null ? move.surfacePos().x : DEFAULT_SURFACE_POS;
         float y = move.surfacePos() != null ? move.surfacePos().y : DEFAULT_SURFACE_POS;
 
-        // Built-in zone ids keep their classic behavior; layout-declared ids
-        // run through the layout dictionary validation chain first.
+        // The reserved zones keep their dedicated containers; layout-declared
+        // ids run through the layout dictionary validation chain first.
         ResourceLocation zoneId = target.zoneId();
-        if (TableLayoutDefinition.ZONE_DRAW_PILE.equals(zoneId))
-        {
-            located.removeFromZone().run();
-            groupState.addToDrawPileTop(located.card());
-            return true;
-        }
-        if (TableLayoutDefinition.ZONE_DISCARD_PILE.equals(zoneId))
-        {
-            located.removeFromZone().run();
-            // A played card leaves its owner's hidden hand, so the discard
-            // pile shows it face up; the pile is the table's public record
-            // of what has been played. F can still turn it back over.
-            located.card().setFaceUp(true);
-            groupState.addToDiscardPileTop(located.card());
-            return true;
-        }
         if (TableLayoutDefinition.ZONE_FREE.equals(zoneId) || TableLayoutDefinition.ZONE_HAND.equals(zoneId))
         {
             TableSectionState section = sectionState(level, group, target.sectionPos());
@@ -240,114 +226,170 @@ public final class CardActionService
     }
 
     /**
-     * The layout the table currently runs, resolved from the group's binding.
-     * Falls back to the built-in default (the classic placement) when no
-     * layout is bound; returns {@code null} only when a bound layout vanished
-     * from the registry, in which case layout-declared ids are rejected.
+     * The normalized layout the table currently runs, resolved from the
+     * group's binding. {@code null} when no deck is bound (the empty table)
+     * or when the bound layout vanished from the registry; in both cases
+     * layout-declared ids are rejected and only the reserved zones work.
      */
+    @Nullable
     private static TableLayoutDefinition resolveLayout(TableGroupState groupState)
     {
         ResourceLocation layoutId = groupState.getActiveLayoutId();
         if (layoutId == null)
         {
-            return TableLayoutDefinition.defaultLayout();
+            return null;
         }
         TableLayoutDefinition layout = CardRegistry.getLayout(layoutId);
-        return layout != null ? layout.normalized() : null;
+        return layout == null ? null : layout.normalized();
     }
 
-    // Draw / shuffle ---------------------------------------------------------
+    // Declared actions --------------------------------------------------------
 
-    private static boolean drawCards(Level level, TableGroupService.GroupView group,
-                                     ServerPlayer actor, int count)
+    /**
+     * Runs one action of the active layout's action table through its generic
+     * primitive. The action id must exist in the table and a DRAW/SHUFFLE
+     * source must be a declared STACK zone; everything else is rejected
+     * without touching state (and without bumping the version).
+     */
+    private static boolean performAction(Level level, TableGroupService.GroupView group,
+                                         ServerPlayer actor, CardActionPacket.Action.Perform perform)
     {
         TableGroupState groupState = groupState(level, group);
-        TableSectionState seat = ownSeat(level, group, actor);
-        if (groupState == null || seat == null)
+        TableLayoutDefinition layout = groupState == null ? null : resolveLayout(groupState);
+        TableActionDefinition action = layout == null ? null : actionById(layout, perform.actionId());
+        if (action == null)
         {
-            return false;
+            return false; // not in the active action table: stale or hostile client
         }
-        List<CardInstance> drawn = new ArrayList<>(Math.min(count, groupState.getDrawPile().size()));
-        for (int index = 0; index < count; index++)
-        {
-            CardInstance card = groupState.takeFromDrawPileTop();
-            if (card == null)
-            {
-                break;
-            }
-            drawn.add(card);
-        }
-        if (drawn.isEmpty())
-        {
-            return false;
-        }
-        seat.addHandCards(drawn);
-        return true;
+        return applyDeclaredAction(layout, groupState, ownSeat(level, group, actor),
+                actor.getUUID(), action, perform.instanceId(), level.getRandom(),
+                collectSections(level, group));
     }
 
-    private static boolean shuffle(Level level, TableGroupService.GroupView group,
-                                   CardActionPacket.Action.Shuffle shuffle)
+    @Nullable
+    private static TableActionDefinition actionById(TableLayoutDefinition layout,
+                                                    ResourceLocation actionId)
     {
-        ResourceLocation shuffleZoneId = shuffle.zone().zoneId();
-        if (TableLayoutDefinition.ZONE_DRAW_PILE.equals(shuffleZoneId))
+        for (TableActionDefinition action : layout.actions())
         {
-            // Classic draw pile shuffle (unchanged behavior).
-            TableGroupState groupState = groupState(level, group);
-            if (groupState == null)
+            if (action.id().equals(actionId))
             {
-                return false;
+                return action;
             }
-            // Server-side randomness only; the resulting order travels through
-            // the normal sync path, clients never shuffle. Fisher-Yates over
-            // the pile (RandomSource is not a java.util.Random).
-            List<CardInstance> pile = groupState.getDrawPile();
-            for (int index = pile.size() - 1; index > 0; index--)
-            {
-                Collections.swap(pile, index, level.getRandom().nextInt(index + 1));
-            }
-            return true;
         }
-        // Generalized shuffle (Phase 3): any STACK zone in the active layout
-        // may be shuffled; SHARED needs no seat section.
-        {
-            // Generalized shuffle (Phase 3): any STACK zone in the active
-            // layout may be shuffled; SHARED needs no seat section.
-            TableGroupState groupState = groupState(level, group);
-            TableLayoutDefinition layout = groupState == null ? null : resolveLayout(groupState);
-            ZoneDefinition definition = layout == null ? null : layout.zone(shuffleZoneId);
-            if (definition == null || definition.kind() != ZoneDefinition.Kind.STACK)
-            {
-                return false;
-            }
-            if (definition.scope() == ZoneDefinition.Scope.PER_SEAT
-                    && (shuffle.zone().sectionPos() == null
-                        || sectionState(level, group, shuffle.zone().sectionPos()) == null))
-            {
-                return false;
-            }
-            ZoneState zone = definition.scope() == ZoneDefinition.Scope.SHARED
-                    ? groupState.getSharedZones().get(shuffleZoneId)
-                    : sectionState(level, group, shuffle.zone().sectionPos()).getSeatZones().get(shuffleZoneId);
-            if (zone == null || zone.storage() != ZoneState.Storage.STACK)
-            {
-                return false;
-            }
-            shuffleList(zone.stackCards());
-            groupState.bumpVersion();
-            TableGroupService.syncGroup(level, group);
-            return true;
-        }
+        return null;
     }
 
-    private static void shuffleList(List<CardInstance> list)
+    /**
+     * Pure core of the declared-action primitives, shared with the
+     * feasibility test: applies one action to plain state. All server guards
+     * (menu validity, seating) happen in {@link #handle}; this method only
+     * enforces the layout rules.
+     *
+     * @param actorSeat the acting player's seat ({@code null} when not seated)
+     * @param sections  every section of the table group, for locating cards
+     * @param random    server-side randomness for SHUFFLE
+     */
+    static boolean applyDeclaredAction(TableLayoutDefinition layout,
+                                       TableGroupState groupState,
+                                       @Nullable TableSectionState actorSeat,
+                                       @Nullable UUID actorId,
+                                       TableActionDefinition action,
+                                       @Nullable UUID instanceId,
+                                       RandomSource random,
+                                       List<TableSectionState> sections)
     {
-        // Server-side randomness only; the resulting order travels through
-        // the normal sync path, clients never shuffle. Fisher-Yates
-        // (RandomSource is not a java.util.Random).
-        for (int index = list.size() - 1; index > 0; index--)
+        switch (action.type())
         {
-            Collections.swap(list, index, new java.security.SecureRandom().nextInt(index + 1));
+            case DRAW ->
+            {
+                // DRAW primitive: take up to {@code amount} cards from the
+                // source pile top into the actor's own hand.
+                ZoneState pile = stackContainer(layout, groupState, actorSeat, action.sourceZone());
+                if (pile == null || actorSeat == null)
+                {
+                    return false;
+                }
+                List<CardInstance> drawn = new ArrayList<>(Math.min(action.amount(), pile.stackCards().size()));
+                for (int index = 0; index < action.amount(); index++)
+                {
+                    CardInstance card = pile.takeFromStackTop();
+                    if (card == null)
+                    {
+                        break;
+                    }
+                    drawn.add(card);
+                }
+                if (drawn.isEmpty())
+                {
+                    return false;
+                }
+                actorSeat.addHandCards(drawn);
+                return true;
+            }
+            case SHUFFLE ->
+            {
+                // SHUFFLE primitive: Fisher-Yates over the source pile; the
+                // resulting order travels through the normal sync path.
+                ZoneState pile = stackContainer(layout, groupState, actorSeat, action.sourceZone());
+                if (pile == null)
+                {
+                    return false;
+                }
+                List<CardInstance> cards = pile.stackCards();
+                for (int index = cards.size() - 1; index > 0; index--)
+                {
+                    Collections.swap(cards, index, random.nextInt(index + 1));
+                }
+                return true;
+            }
+            case FLIP ->
+            {
+                Located located = locateIn(groupState, actorId, instanceId, sections);
+                if (located == null)
+                {
+                    return false;
+                }
+                located.card().flip();
+                return true;
+            }
+            case ROTATE ->
+            {
+                Located located = locateIn(groupState, actorId, instanceId, sections);
+                if (located == null)
+                {
+                    return false;
+                }
+                located.card().rotate();
+                return true;
+            }
         }
+        return false;
+    }
+
+    /**
+     * The STACK container of a declared zone for the acting player: SHARED
+     * zones live on the group, PER_SEAT ones in the actor's own seat.
+     */
+    @Nullable
+    private static ZoneState stackContainer(TableLayoutDefinition layout, TableGroupState groupState,
+                                            @Nullable TableSectionState actorSeat,
+                                            @Nullable ResourceLocation zoneId)
+    {
+        if (zoneId == null)
+        {
+            return null;
+        }
+        ZoneDefinition definition = layout.zone(zoneId);
+        if (definition == null || definition.kind() != ZoneDefinition.Kind.STACK)
+        {
+            return null; // only declared piles can be drawn from or shuffled
+        }
+        if (definition.scope() == ZoneDefinition.Scope.SHARED)
+        {
+            return groupState.getSharedZones().get(zoneId);
+        }
+        return actorSeat == null ? null : actorSeat.getSeatZones().get(zoneId);
     }
 
     // Locating ---------------------------------------------------------------
@@ -358,40 +400,81 @@ public final class CardActionService
                                   UUID actorId, UUID instanceId)
     {
         TableGroupState groupState = groupState(level, group);
-        if (groupState != null)
+        if (groupState == null)
         {
-            if (containsInstance(groupState.getDrawPile(), instanceId))
+            return null;
+        }
+        return locateIn(groupState, actorId, instanceId, collectSections(level, group));
+    }
+
+    /**
+     * Pure locator shared with {@link #applyDeclaredAction}: shared zones
+     * first, then each section's surface, seat zones and finally the actor's
+     * own hand. A card in no searchable zone cannot be acted upon.
+     */
+    @Nullable
+    private static Located locateIn(TableGroupState groupState, @Nullable UUID actorId,
+                                    @Nullable UUID instanceId, List<TableSectionState> sections)
+    {
+        if (instanceId == null)
+        {
+            return null;
+        }
+        for (ZoneState zone : groupState.getSharedZones().values())
+        {
+            Located located = locateInZone(zone, instanceId);
+            if (located != null)
             {
-                return new Located(findInstance(groupState.getDrawPile(), instanceId),
-                        () -> groupState.getDrawPile().removeIf(card -> card.instanceId().equals(instanceId)));
-            }
-            if (containsInstance(groupState.getDiscardPile(), instanceId))
-            {
-                return new Located(findInstance(groupState.getDiscardPile(), instanceId),
-                        () -> groupState.getDiscardPile().removeIf(card -> card.instanceId().equals(instanceId)));
+                return located;
             }
         }
-        for (BlockPos pos : group.positions())
+        for (TableSectionState section : sections)
         {
-            if (!(level.getBlockEntity(pos) instanceof CardTableBlockEntity section))
-            {
-                continue;
-            }
-            TableSectionState sectionState = section.getSectionState();
-            var found = sectionState.getSurface().find(instanceId);
+            var found = section.getSurface().find(instanceId);
             if (found.isPresent())
             {
-                return new Located(found.get().card(), () -> sectionState.getSurface().remove(instanceId));
+                return new Located(found.get().card(), () -> section.getSurface().remove(instanceId));
+            }
+            for (ZoneState zone : section.getSeatZones().values())
+            {
+                Located located = locateInZone(zone, instanceId);
+                if (located != null)
+                {
+                    return located;
+                }
             }
             // A hand is invisible and inert to everyone but its owner.
-            if (actorId.equals(sectionState.getOccupantId())
-                    && containsInstance(sectionState.getHand(), instanceId))
+            if (actorId != null && actorId.equals(section.getOccupantId()))
             {
-                return new Located(findInstance(sectionState.getHand(), instanceId),
-                        () -> sectionState.removeHandCard(instanceId));
+                for (CardInstance card : section.getHand())
+                {
+                    if (card.instanceId().equals(instanceId))
+                    {
+                        return new Located(card, () -> section.removeHandCard(instanceId));
+                    }
+                }
             }
         }
         return null;
+    }
+
+    @Nullable
+    private static Located locateInZone(ZoneState zone, UUID instanceId)
+    {
+        if (zone.storage() == ZoneState.Storage.STACK)
+        {
+            for (CardInstance card : zone.stackCards())
+            {
+                if (card.instanceId().equals(instanceId))
+                {
+                    return new Located(card, () ->
+                            zone.stackCards().removeIf(pileCard -> pileCard.instanceId().equals(instanceId)));
+                }
+            }
+            return null;
+        }
+        var found = zone.find(instanceId);
+        return found.map(entry -> new Located(entry.card(), () -> zone.remove(instanceId))).orElse(null);
     }
 
     // Helpers ----------------------------------------------------------------
@@ -400,22 +483,18 @@ public final class CardActionService
     {
     }
 
-    private static boolean containsInstance(List<CardInstance> cards, UUID instanceId)
+    /** Every section state of the table group, in the group's position order. */
+    private static List<TableSectionState> collectSections(Level level, TableGroupService.GroupView group)
     {
-        return findInstance(cards, instanceId) != null;
-    }
-
-    @Nullable
-    private static CardInstance findInstance(List<CardInstance> cards, UUID instanceId)
-    {
-        for (CardInstance card : cards)
+        List<TableSectionState> sections = new ArrayList<>();
+        for (BlockPos pos : group.positions())
         {
-            if (card.instanceId().equals(instanceId))
+            if (level.getBlockEntity(pos) instanceof CardTableBlockEntity section)
             {
-                return card;
+                sections.add(section.getSectionState());
             }
         }
-        return null;
+        return sections;
     }
 
     @Nullable

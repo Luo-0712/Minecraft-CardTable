@@ -52,8 +52,9 @@ public final class CardSetDefinition
     }
 
     /**
-     * Layout this set runs on its table; {@code null} means the built-in
-     * {@code cardtable:default} layout (identical to the classic table).
+     * Layout this set runs on its table; a set is required to declare one
+     * (the core ships no built-in fallback layout), and a missing or
+     * unregistered layout makes the deck insert fail with a hint.
      */
     @Nullable
     public ResourceLocation layout()
@@ -93,7 +94,7 @@ public final class CardSetDefinition
             return this;
         }
 
-        /** {@code null} (the default) resolves to the built-in {@code cardtable:default} layout. */
+        /** The layout this set runs on; a pack without one is rejected at load time. */
         public Builder layout(@Nullable ResourceLocation layout)
         {
             this.layout = layout;

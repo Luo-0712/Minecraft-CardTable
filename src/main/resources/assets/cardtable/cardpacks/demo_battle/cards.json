@@ -1,0 +1,12 @@
+[
+  { "id": "ember_drake",  "display_name": {"text": "余烬幼龙"}, "front": "king_of_hearts",   "sort": 0 },
+  { "id": "tide_serpent", "display_name": {"text": "潮汐巨蟒"}, "front": "ace_of_spades",    "sort": 1 },
+  { "id": "stone_golem",  "display_name": {"text": "磐石魔像"}, "front": "queen_of_diamonds","sort": 2 },
+  { "id": "storm_hawk",   "display_name": {"text": "风暴鹰"},   "front": "jack_of_clubs",    "sort": 3 },
+  { "id": "void_mage",    "display_name": {"text": "虚空法师"}, "front": "ten_of_spades",    "sort": 4 },
+  { "id": "iron_scout",   "display_name": {"text": "钢铁斥候"}, "front": "eight_of_hearts",  "sort": 5 },
+  { "id": "moss_beast",   "display_name": {"text": "苔藓兽"},   "front": "seven_of_diamonds","sort": 6 },
+  { "id": "frost_wolf",   "display_name": {"text": "霜狼"},     "front": "five_of_clubs",    "sort": 7 },
+  { "id": "sun_priest",   "display_name": {"text": "烈阳祭司"}, "front": "three_of_hearts",  "sort": 8 },
+  { "id": "shade_thief",  "display_name": {"text": "暗影窃贼"}, "front": "two_of_spades",    "sort": 9 }
+]

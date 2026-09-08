@@ -3,6 +3,7 @@ package com.example.cardtable.content;
 import com.example.cardtable.CardTableMod;
 import com.example.cardtable.api.CardDefinition;
 import com.example.cardtable.api.CardSetDefinition;
+import com.example.cardtable.api.TableActionDefinition;
 import com.example.cardtable.api.TableLayoutDefinition;
 import com.example.cardtable.api.ZoneDefinition;
 import com.google.gson.JsonArray;
@@ -19,9 +20,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -38,14 +41,24 @@ import java.util.Objects;
  * <pre>
  * set|&lt;setId&gt;|&lt;defaultBack|->|&lt;displayJson&gt;
  * card|&lt;cardId&gt;|&lt;cardSet|-&gt;|&lt;front&gt;|&lt;back|-&gt;|&lt;sortIndex&gt;|&lt;displayJson&gt;
- * layout|&lt;setId&gt;|&lt;nameEncoded|-&gt;|&lt;zoneDescriptor&gt;|...   (format 2)
+ * layout3|&lt;layoutId&gt;|&lt;nameEncoded|-&gt;|&lt;zoneDescriptor&gt;|...|&lt;stockDescriptor&gt;|...|&lt;actionDescriptor&gt;|...
  * </pre>
+ *
+ * <p>{@code zoneDescriptor} is {@code id#kind#scope#x,y,w,h#capacity#visibility#labelEncoded},
+ * {@code stockDescriptor} is {@code selector#zoneId} and {@code actionDescriptor} is
+ * {@code id#type#source#target#amount#key#labelEncoded}, where {@code -} marks an
+ * absent field. Zones, stocks and actions are each sorted independently, so the
+ * line never depends on authored key or entry order.</p>
  */
 public final class CardDefinitionJsonCodec
 {
     /** Lowest accepted pack format (the frozen builder-ecosystem contract). */
     public static final int FORMAT = 1;
-    /** Highest accepted pack format; 2 adds optional {@code layout.json} support. */
+    /**
+     * Highest accepted pack format. Format 2 adds {@code layout.json}, which
+     * is now mandatory for every pack: the core ships no built-in fallback
+     * layout, so a pack without a usable one is rejected whole.
+     */
     public static final int MAX_FORMAT = 2;
 
     /** Relational separator used by the canonical lines above. */
@@ -151,9 +164,13 @@ public final class CardDefinitionJsonCodec
         return new ParsedCard(definition, line);
     }
 
-    /** Registers the pack's optional set and returns its canonical line. */
+    /**
+     * Registers the pack's optional set, bound to {@code layoutId} (the pack
+     * layout registered under the same id), and returns its canonical line.
+     */
     @Nullable
     public static String registerSet(PackMeta pack, TextureMapper textures,
+                                     @Nullable ResourceLocation layoutId,
                                      java.util.function.Consumer<CardSetDefinition> sink)
     {
         PackMeta.SetMeta setMeta = pack.set();
@@ -165,6 +182,7 @@ public final class CardDefinitionJsonCodec
         CardSetDefinition set = CardSetDefinition.builder(pack.id())
                 .displayName(Component.literal(setMeta.name()))
                 .defaultBackTexture(back)
+                .layout(layoutId)
                 .build();
         sink.accept(set);
         return String.join(CANONICAL_SEPARATOR, "set",
@@ -181,11 +199,12 @@ public final class CardDefinitionJsonCodec
     }
 
     /**
-     * Parses a pack's optional {@code layout.json} and registers it as the
-     * pack-id layout (the pack set references it implicitly). Per-zone errors
-     * are skipped with a warning, mirroring the "one broken card must not
-     * sink the pack" policy; a layout without any valid zone returns
-     * {@code null} so the set falls back to the built-in default.
+     * Parses a pack's {@code layout.json} as the pack-id layout. Per-zone and
+     * per-action errors are skipped with a warning, mirroring the "one broken
+     * card must not sink the pack" policy, but the stock mapping is
+     * load-bearing: a missing or bad {@code initial} section rejects the whole
+     * layout, and the loader then rejects the whole pack. A layout without any
+     * valid zone returns {@code null} and is treated the same way.
      *
      * @return the parsed layout with its canonical line, or {@code null} when
      *         nothing valid remains
@@ -212,6 +231,7 @@ public final class CardDefinitionJsonCodec
 
         TableLayoutDefinition.Builder builder = TableLayoutDefinition.builder(pack.id())
                 .displayName(displayName);
+        Map<ResourceLocation, ZoneDefinition> declaredZones = new HashMap<>();
         int accepted = 0;
         if (json.has("zones") && json.get("zones").isJsonArray())
         {
@@ -226,7 +246,9 @@ public final class CardDefinitionJsonCodec
                 }
                 try
                 {
-                    builder.zone(parseZone(element.getAsJsonObject(), pack));
+                    ZoneDefinition zone = parseZone(element.getAsJsonObject(), pack);
+                    builder.zone(zone);
+                    declaredZones.put(zone.id(), zone);
                     accepted++;
                 }
                 catch (Exception exception)
@@ -246,8 +268,116 @@ public final class CardDefinitionJsonCodec
             return null;
         }
 
+        // The stock mapping is layout-level and load-bearing: a bad entry
+        // rejects the whole layout, and the loader then rejects the whole pack.
+        parseInitial(json, pack, declaredZones, builder);
+        parseActions(json, pack, builder, log);
+
         TableLayoutDefinition definition = builder.build();
         return new ParsedLayout(definition, layoutCanonicalLine(definition));
+    }
+
+    /**
+     * The stock mapping (convention two): {@code {"*": "deck"}} maps the
+     * default selector onto a declared STACK zone; set-specific keys may
+     * follow later for multi-deck packs.
+     */
+    private static void parseInitial(JsonObject json, PackMeta pack,
+                                     Map<ResourceLocation, ZoneDefinition> declaredZones,
+                                     TableLayoutDefinition.Builder builder)
+    {
+        if (!json.has("initial") || !json.get("initial").isJsonObject())
+        {
+            throw new JsonParseException("layout.json is missing the initial stock mapping");
+        }
+        JsonObject initial = json.getAsJsonObject("initial");
+        if (!initial.has(TableLayoutDefinition.INITIAL_DEFAULT_KEY))
+        {
+            throw new JsonParseException("initial must declare the default key '"
+                    + TableLayoutDefinition.INITIAL_DEFAULT_KEY + "'");
+        }
+        for (Map.Entry<String, JsonElement> entry : initial.entrySet())
+        {
+            String selector = entry.getKey();
+            if (!entry.getValue().isJsonPrimitive())
+            {
+                throw new JsonParseException("initial[" + selector + "] must be a zone id string");
+            }
+            ResourceLocation target = parseZoneId(entry.getValue().getAsString(), pack);
+            ZoneDefinition zone = declaredZones.get(target);
+            if (zone == null || zone.kind() != ZoneDefinition.Kind.STACK
+                    || zone.scope() != ZoneDefinition.Scope.SHARED)
+            {
+                throw new JsonParseException("initial[" + selector + "] points at '" + target
+                        + "', which is not a declared shared stack zone");
+            }
+            builder.initial(selector, target);
+        }
+    }
+
+    /**
+     * The action table (convention three): per-entry failures are skipped with
+     * a warning; a layout without actions is legal, drag &amp; drop still works.
+     */
+    private static void parseActions(JsonObject json, PackMeta pack,
+                                     TableLayoutDefinition.Builder builder, Logger log)
+    {
+        if (!json.has("actions") || !json.get("actions").isJsonArray())
+        {
+            return;
+        }
+        JsonArray actions = json.getAsJsonArray("actions");
+        for (int index = 0; index < actions.size(); index++)
+        {
+            JsonElement element = actions.get(index);
+            if (!element.isJsonObject())
+            {
+                log.warn("Pack {}: layout action #{} is not an object, skipped", pack.id(), index);
+                continue;
+            }
+            try
+            {
+                builder.action(parseAction(element.getAsJsonObject(), pack));
+            }
+            catch (Exception exception)
+            {
+                log.warn("Pack {}: skipping broken layout action #{}: {}",
+                        pack.id(), index, exception.toString());
+            }
+        }
+    }
+
+    private static TableActionDefinition parseAction(JsonObject json, PackMeta pack)
+    {
+        String rawId = requiredString(json, "id");
+        ResourceLocation actionId = childId(pack.id(), rawId);
+        TableActionDefinition.Type type = parseEnum(requiredString(json, "type"),
+                TableActionDefinition.Type.values(), "action type");
+        TableActionDefinition.Builder builder = TableActionDefinition.builder(actionId).type(type);
+        String rawSource = optionalString(json, "source");
+        if (rawSource != null)
+        {
+            builder.sourceZone(parseZoneId(rawSource, pack));
+        }
+        String rawTarget = optionalString(json, "target");
+        if (rawTarget != null)
+        {
+            builder.targetZone(parseZoneId(rawTarget, pack));
+        }
+        if (json.has("amount") && json.get("amount").isJsonPrimitive())
+        {
+            builder.amount(json.get("amount").getAsInt());
+        }
+        String key = optionalString(json, "key");
+        if (key != null)
+        {
+            builder.key(key);
+        }
+        if (json.has("label") && json.get("label").isJsonObject())
+        {
+            builder.label(Component.Serializer.fromJson(json.get("label")));
+        }
+        return builder.build();
     }
 
     // Parses one zone object; every failure surfaces as an exception so the
@@ -310,21 +440,20 @@ public final class CardDefinitionJsonCodec
     }
 
     // Relative ids resolve into the pack namespace/path; the only legal
-    // namespace-bearing id is a full overridable built-in id.
+    // namespace-bearing id is the reserved table-surface zone, so a layout
+    // can re-rect the empty table but never re-declare a built-in pile.
     private static ResourceLocation parseZoneId(String rawId, PackMeta pack)
     {
         if (rawId.indexOf(':') >= 0)
         {
             ResourceLocation full = new ResourceLocation(rawId);
             if (CardTableMod.MODID.equals(full.getNamespace())
-                    && (TableLayoutDefinition.ZONE_DRAW_PILE.equals(full)
-                        || TableLayoutDefinition.ZONE_DISCARD_PILE.equals(full)
-                        || TableLayoutDefinition.ZONE_FREE.equals(full)))
+                    && TableLayoutDefinition.ZONE_FREE.equals(full))
             {
                 return full;
             }
             throw new JsonParseException("Zone id '" + rawId + "' must be a pack-relative id"
-                    + " (or an overridable cardtable: built-in)");
+                    + " (or the reserved cardtable:free surface)");
         }
         String lower = rawId.toLowerCase(Locale.ROOT);
         for (int i = 0; i < lower.length(); i++)
@@ -353,10 +482,11 @@ public final class CardDefinitionJsonCodec
     }
 
     /**
-     * The {@code layout|} canonical line: layout name plus one descriptor per
-     * zone, sorted by full zone id, percent-encoded free text. The float
-     * format ({@code Float.toString}) and the encoding are part of the
-     * builder-ecosystem contract.
+     * The {@code layout3|} canonical line: layout name, one descriptor per
+     * zone (sorted by full zone id), one per stock entry (sorted by selector)
+     * and one per action (sorted by id), all with percent-encoded free text.
+     * The float format ({@code Float.toString}) and the encoding are part of
+     * the builder-ecosystem contract.
      */
     public static String layoutCanonicalLine(TableLayoutDefinition layout)
     {
@@ -375,10 +505,36 @@ public final class CardDefinitionJsonCodec
                     zone.visibility().name().toLowerCase(Locale.ROOT),
                     zone.label() != null ? percentEncode(zone.label().getString()) : CANONICAL_NULL));
         }
-        return String.join(CANONICAL_SEPARATOR, "layout",
-                layout.id().toString(),
-                layout.displayName() != null ? percentEncode(layout.displayName().getString()) : CANONICAL_NULL,
-                String.join(CANONICAL_SEPARATOR, descriptors));
+        // Stock mapping (convention two), sorted by selector.
+        List<String> stocks = new ArrayList<>();
+        for (Map.Entry<String, ResourceLocation> entry : layout.initialZones().entrySet())
+        {
+            stocks.add(entry.getKey() + "#" + entry.getValue());
+        }
+        stocks.sort(String::compareTo);
+        // Action table (convention three), sorted by id.
+        List<String> actions = new ArrayList<>();
+        for (TableActionDefinition action : layout.actions())
+        {
+            actions.add(String.join("#",
+                    action.id().toString(),
+                    action.type().name().toLowerCase(Locale.ROOT),
+                    action.sourceZone() != null ? action.sourceZone().toString() : CANONICAL_NULL,
+                    action.targetZone() != null ? action.targetZone().toString() : CANONICAL_NULL,
+                    Integer.toString(action.amount()),
+                    action.key() != null ? action.key() : CANONICAL_NULL,
+                    action.label() != null ? percentEncode(action.label().getString()) : CANONICAL_NULL));
+        }
+        actions.sort(String::compareTo);
+
+        List<String> segments = new ArrayList<>();
+        segments.add("layout3");
+        segments.add(layout.id().toString());
+        segments.add(layout.displayName() != null ? percentEncode(layout.displayName().getString()) : CANONICAL_NULL);
+        segments.addAll(descriptors);
+        segments.addAll(stocks);
+        segments.addAll(actions);
+        return String.join(CANONICAL_SEPARATOR, segments);
     }
 
     // RFC 3986 application/x-www-form-urlencoded style with %20 for spaces,

@@ -1,0 +1,10 @@
+{
+  "format": 2,
+  "id": "cardtable:demo_battle",
+  "name": "可行性验证·对战桌",
+  "version": "1.0.0",
+  "set": {
+    "name": "Demo Battle",
+    "back": "back"
+  }
+}

@@ -124,17 +124,18 @@ class CardDefinitionJsonCodecTest
     }
 
     @Test
-    void registersSetWithMappedBack()
+    void registersSetWithMappedBackAndBoundLayout()
     {
         CardDefinitionJsonCodec.PackMeta meta = new CardDefinitionJsonCodec.PackMeta(
                 new ResourceLocation("cardtable", "standard"), "标准扑克", "1.0.0",
                 new CardDefinitionJsonCodec.PackMeta.SetMeta("标准扑克", "back"));
-        String[] canonical = new String[1];
-        CardSetDefinition set = null;
         var sink = new java.util.ArrayList<CardSetDefinition>();
-        String line = CardDefinitionJsonCodec.registerSet(meta, MAPPER, sink::add);
+        ResourceLocation layoutId = new ResourceLocation("cardtable", "standard");
+        String line = CardDefinitionJsonCodec.registerSet(meta, MAPPER, layoutId, sink::add);
         assertEquals(1, sink.size());
         assertEquals("cardtable:card/standard/back", sink.get(0).defaultBackTexture().toString());
+        // The pack set is bound to the pack layout (pack id == set id == layout id).
+        assertEquals(layoutId, sink.get(0).layout());
         assertEquals("set|cardtable:standard|cardtable:card/standard/back|", line.substring(0,
                 line.lastIndexOf('|') + 1));
     }

@@ -22,8 +22,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * writes must be consumed by {@code decode()} exactly once.
  *
  * <p>Since protocol 3 the zone is addressed by its open layout id plus an
- * optional seat section; unknown ids are rejected server-side and never
- * reach the state.</p>
+ * optional seat section; since protocol 4 {@code Perform} replaces the old
+ * {@code Draw}/{@code Shuffle} kinds — pile semantics live in the pack-declared
+ * action table, not in the wire format.</p>
  */
 class CardActionPacketCodecTest
 {
@@ -32,23 +33,11 @@ class CardActionPacketCodecTest
     private static final UUID CARD_ID = UUID.randomUUID();
     private static final ResourceLocation PACK_ZONE =
             new ResourceLocation("cardtable", "my_tcg/bench");
+    private static final ResourceLocation ACTION_ID =
+            new ResourceLocation("cardtable", "my_tcg/draw");
 
     @Test
-    void moveToDrawPileRoundTrips()
-    {
-        assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(TableLayoutDefinition.ZONE_DRAW_PILE, null), null));
-    }
-
-    @Test
-    void moveToDiscardPileRoundTrips()
-    {
-        assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(TableLayoutDefinition.ZONE_DISCARD_PILE, null), null));
-    }
-
-    @Test
-    void moveToFreeZoneRoundTrips()
+    void moveToReservedFreeZoneRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
                 new ZoneRef(TableLayoutDefinition.ZONE_FREE, SECTION_POS), new Vec2(0.25F, 0.75F)));
@@ -88,22 +77,15 @@ class CardActionPacketCodecTest
     }
 
     @Test
-    void drawRoundTrips()
+    void performWithoutInstanceRoundTrips()
     {
-        assertActionRoundTrip(new CardActionPacket.Action.Draw(3));
+        assertActionRoundTrip(new CardActionPacket.Action.Perform(ACTION_ID, null));
     }
 
     @Test
-    void shuffleRoundTrips()
+    void performWithInstanceRoundTrips()
     {
-        assertActionRoundTrip(new CardActionPacket.Action.Shuffle(
-                new ZoneRef(TableLayoutDefinition.ZONE_DRAW_PILE, null)));
-    }
-
-    @Test
-    void shuffleToPackStackZoneRoundTrips()
-    {
-        assertActionRoundTrip(new CardActionPacket.Action.Shuffle(new ZoneRef(PACK_ZONE, SECTION_POS)));
+        assertActionRoundTrip(new CardActionPacket.Action.Perform(ACTION_ID, CARD_ID));
     }
 
     /** Non-Move actions are records with value equality, so a plain compare suffices. */

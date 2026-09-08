@@ -1,0 +1,49 @@
+{
+  "name": "经典扑克牌桌",
+  "zones": [
+    {
+      "id": "deck",
+      "kind": "stack",
+      "scope": "shared",
+      "rect": [0.02, 0.02, 0.06, 0.12],
+      "label": { "text": "牌库" }
+    },
+    {
+      "id": "discard",
+      "kind": "stack",
+      "scope": "shared",
+      "rect": [0.92, 0.86, 0.06, 0.12],
+      "label": { "text": "弃牌堆" }
+    }
+  ],
+  "initial": { "*": "deck" },
+  "actions": [
+    {
+      "id": "draw",
+      "type": "draw",
+      "source": "deck",
+      "amount": 1,
+      "key": "key.keyboard.d",
+      "label": { "text": "抽牌" }
+    },
+    {
+      "id": "shuffle",
+      "type": "shuffle",
+      "source": "deck",
+      "key": "key.keyboard.s",
+      "label": { "text": "洗牌" }
+    },
+    {
+      "id": "flip",
+      "type": "flip",
+      "key": "key.keyboard.f",
+      "label": { "text": "翻面" }
+    },
+    {
+      "id": "rotate",
+      "type": "rotate",
+      "key": "key.keyboard.r",
+      "label": { "text": "旋转" }
+    }
+  ]
+}

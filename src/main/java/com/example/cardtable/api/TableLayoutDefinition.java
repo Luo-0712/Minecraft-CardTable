@@ -12,51 +12,64 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Immutable description of one table layout: the set of zones a table shows
- * while a deck of the owning {@link CardSetDefinition} is loaded. A layout
- * only describes <em>where zones are</em>; it never carries game rules.
+ * Immutable description of one table layout: the zones a table shows and the
+ * primitives it offers while a deck of the owning {@link CardSetDefinition}
+ * is loaded. A layout never carries game rules.
  *
- * <p>Four reserved built-in zone ids ({@code cardtable:draw_pile},
- * {@code cardtable:discard_pile}, {@code cardtable:hand},
- * {@code cardtable:free}) keep the core behaviors working in every layout.
- * {@link #normalized()} applies the implicit-inheritance rule so every
- * layout always ends up with the built-in zones: undeclared built-ins are
- * filled from {@link #defaultLayout()}, and full-id declarations may override
- * rect/capacity/label of {@code draw_pile}/{@code discard_pile}/{@code free}
- * but never their scope/kind. The function is pure so the server and the
- * client can normalize the same layout id independently and agree.</p>
+ * <p>Two structural conventions let the core stay free of any game concept:</p>
+ * <ul>
+ *   <li><b>{@code kind == STACK} is a pile.</b> Every STACK zone is a
+ *       deck-owned pile the core instantiates a container for (one per table
+ *       group for SHARED, one per seat for PER_SEAT). Zone ids are free-form;
+ *       the core never interprets them.</li>
+ *   <li><b>{@code initial} names the stock.</b> The layout maps a card-set
+ *       selector to the STACK zone a newly inserted deck loads into. Today
+ *       only the {@value #INITIAL_DEFAULT_KEY} default key exists; future
+ *       multi-set layouts may add set-specific keys, so the mapping is an
+ *       ordered map rather than a single field.</li>
+ * </ul>
+ *
+ * <p>Only two reserved ids remain: {@code cardtable:hand} is a system zone
+ * that can never be declared, and {@code cardtable:free} is the empty table
+ * surface itself — a full-id declaration may override rect/capacity/label but
+ * never its scope/kind, and an undeclared one is implicitly provided so
+ * drops always have a landing spot. {@link #normalized()} is a pure function,
+ * so the server and the client can normalize the same layout id independently
+ * and agree.</p>
  */
 public final class TableLayoutDefinition
 {
     /** Reserved hand zone: a per-seat stack rendered as the fixed hand strip. */
     public static final ResourceLocation ZONE_HAND = new ResourceLocation(CardTableMod.MODID, "hand");
-    /** Reserved draw pile: the fixed target of the Draw action. */
-    public static final ResourceLocation ZONE_DRAW_PILE = new ResourceLocation(CardTableMod.MODID, "draw_pile");
-    /** Reserved discard pile: face-up public record. */
-    public static final ResourceLocation ZONE_DISCARD_PILE = new ResourceLocation(CardTableMod.MODID, "discard_pile");
-    /** Reserved free placement zone, the descendant of the old SURFACE. */
+    /** Reserved free placement zone: the empty table surface (implicit in every layout). */
     public static final ResourceLocation ZONE_FREE = new ResourceLocation(CardTableMod.MODID, "free");
 
-    /** The fallback layout every undeclared-layout set runs; replicates current placement. */
-    public static final ResourceLocation DEFAULT_LAYOUT_ID = new ResourceLocation(CardTableMod.MODID, "default");
+    /** Selector key of the default stock pile; today the only supported key. */
+    public static final String INITIAL_DEFAULT_KEY = "*";
 
     private final ResourceLocation id;
     @Nullable
     private final Component displayName;
     private final List<ZoneDefinition> zones;
+    private final List<TableActionDefinition> actions;
+    private final Map<String, ResourceLocation> initialZones;
     @Nullable
     private final Map<ResourceLocation, ZoneDefinition> zoneIndex;
 
     private TableLayoutDefinition(Builder builder)
     {
-        this(builder.id, builder.displayName, builder.zones);
+        this(builder.id, builder.displayName, builder.zones, builder.actions, builder.initialZones);
     }
 
-    private TableLayoutDefinition(ResourceLocation id, @Nullable Component displayName, List<ZoneDefinition> zones)
+    private TableLayoutDefinition(ResourceLocation id, @Nullable Component displayName,
+                                  List<ZoneDefinition> zones, List<TableActionDefinition> actions,
+                                  Map<String, ResourceLocation> initialZones)
     {
         this.id = id;
         this.displayName = displayName;
         this.zones = List.copyOf(zones);
+        this.actions = List.copyOf(actions);
+        this.initialZones = Map.copyOf(initialZones);
         Map<ResourceLocation, ZoneDefinition> index = new LinkedHashMap<>();
         for (ZoneDefinition zone : this.zones)
         {
@@ -70,7 +83,7 @@ public final class TableLayoutDefinition
         return new Builder(id);
     }
 
-    /** Unique layout id, e.g. {@code cardtable:default}. */
+    /** Unique layout id, e.g. {@code cardtable:standard/layout}. */
     public ResourceLocation id()
     {
         return this.id;
@@ -89,6 +102,58 @@ public final class TableLayoutDefinition
         return this.zones;
     }
 
+    /** The declared actions in declaration order; may be empty. */
+    public List<TableActionDefinition> actions()
+    {
+        return this.actions;
+    }
+
+    /**
+     * The stock mapping: card-set selector &rarr; pile zone id, in declaration
+     * order. Content declares at least the {@value #INITIAL_DEFAULT_KEY} entry;
+     * the map stays empty for layouts the pack never gave a stock.
+     */
+    public Map<String, ResourceLocation> initialZones()
+    {
+        return this.initialZones;
+    }
+
+    /**
+     * The pile a newly inserted deck of {@code setId} loads into. Today only
+     * the {@value #INITIAL_DEFAULT_KEY} selector exists, so the default entry
+     * is the answer; a future multi-set layout may add set-specific keys that
+     * take precedence over it. Returns {@code null} when the layout declares
+     * no usable stock, in which case the deck insert must be rejected.
+     */
+    @Nullable
+    public ZoneDefinition initialZoneFor(@Nullable ResourceLocation setId)
+    {
+        if (this.initialZones.isEmpty())
+        {
+            return null;
+        }
+        ResourceLocation target = setId != null ? this.initialZones.get(setId.toString()) : null;
+        if (target == null)
+        {
+            target = this.initialZones.get(INITIAL_DEFAULT_KEY);
+        }
+        return target == null ? null : this.zone(target);
+    }
+
+    /** Every declared pile per the kind == STACK convention, in declaration order. */
+    public List<ZoneDefinition> pileZones()
+    {
+        List<ZoneDefinition> piles = new ArrayList<>();
+        for (ZoneDefinition zone : this.zones)
+        {
+            if (zone.kind() == ZoneDefinition.Kind.STACK)
+            {
+                piles.add(zone);
+            }
+        }
+        return List.copyOf(piles);
+    }
+
     @Nullable
     public ZoneDefinition zone(@Nullable ResourceLocation id)
     {
@@ -98,22 +163,22 @@ public final class TableLayoutDefinition
     @Override
     public String toString()
     {
-        return "TableLayoutDefinition[" + this.id + " " + this.zones.size() + " zone(s)]";
+        return "TableLayoutDefinition[" + this.id + " " + this.zones.size() + " zone(s), "
+                + this.actions.size() + " action(s)]";
     }
 
     /**
-     * Implicit-inheritance normalization (pure function). Guarantees the
-     * result contains all four built-in zones: undeclared built-ins are
-     * filled from {@link #defaultLayout()}; full-id declarations of
-     * {@code draw_pile}/{@code discard_pile}/{@code free} override
-     * rect/capacity/label while scope/kind stay locked to the built-in
-     * values (a mismatching declaration falls back to the built-in
-     * placement); {@code hand} is a system zone and can never be declared.
+     * Normalization (pure function). Guarantees the result is a self-consistent
+     * table: declarations of the reserved {@code hand} zone are dropped, a
+     * {@code free} declaration keeps only rect/capacity/label/visibility while
+     * scope/kind stay locked (a mismatching declaration is skipped and the
+     * implicit default takes over), the free surface is added when absent, and
+     * actions/stock entries whose zones do not resolve to a declared STACK
+     * zone are dropped so both peers agree on the usable action table.
      */
     public TableLayoutDefinition normalized()
     {
         Map<ResourceLocation, ZoneDefinition> result = new LinkedHashMap<>();
-        // Declared zones first, in declaration order, minus unusable entries.
         for (ZoneDefinition zone : this.zones)
         {
             ResourceLocation zoneId = zone.id();
@@ -121,9 +186,9 @@ public final class TableLayoutDefinition
             {
                 continue; // system zone: declaring it is always invalid
             }
-            if (isOverridableBuiltin(zoneId))
+            if (ZONE_FREE.equals(zoneId))
             {
-                ZoneDefinition builtin = defaultLayout().zone(zoneId);
+                ZoneDefinition builtin = builtinFreeZone();
                 if (zone.kind() != builtin.kind() || zone.scope() != builtin.scope())
                 {
                     continue; // scope/kind tampering: skip, implicit default takes over
@@ -140,39 +205,49 @@ public final class TableLayoutDefinition
                 result.putIfAbsent(zoneId, zone);
             }
         }
-        // Implicit inheritance: fill any missing built-in from the default layout.
-        for (ZoneDefinition builtin : defaultLayout().zones())
-        {
-            result.putIfAbsent(builtin.id(), builtin);
-        }
-        return new TableLayoutDefinition(this.id, this.displayName, new ArrayList<>(result.values()));
-    }
+        // The empty table surface always exists, even for a fully custom layout.
+        result.putIfAbsent(ZONE_FREE, builtinFreeZone());
 
-    private static boolean isOverridableBuiltin(ResourceLocation zoneId)
-    {
-        return ZONE_DRAW_PILE.equals(zoneId) || ZONE_DISCARD_PILE.equals(zoneId) || ZONE_FREE.equals(zoneId);
+        // Keep only actions the normalized layout can actually run.
+        List<TableActionDefinition> actions = new ArrayList<>();
+        for (TableActionDefinition action : this.actions)
+        {
+            if (action.sourceZone() != null)
+            {
+                ZoneDefinition source = result.get(action.sourceZone());
+                if (source == null || source.kind() != ZoneDefinition.Kind.STACK)
+                {
+                    continue; // dangling or non-pile source: the table cannot run it
+                }
+            }
+            actions.add(action);
+        }
+
+        // Keep only stock entries pointing at a declared shared pile.
+        Map<String, ResourceLocation> initialZones = new LinkedHashMap<>();
+        for (Map.Entry<String, ResourceLocation> entry : this.initialZones.entrySet())
+        {
+            ZoneDefinition target = result.get(entry.getValue());
+            if (target != null && target.kind() == ZoneDefinition.Kind.STACK
+                    && target.scope() == ZoneDefinition.Scope.SHARED)
+            {
+                initialZones.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        return new TableLayoutDefinition(this.id, this.displayName,
+                new ArrayList<>(result.values()), actions, initialZones);
     }
 
     /**
-     * The built-in default layout: draw pile top-left; discard pile covering
-     * the whole playfield, so any drop outside the hand strip, the draw pile
-     * or a seat's free area discards the card (the pile itself renders at the
-     * playfield's centre); the per-seat free zone keeps the player's front
-     * half of their cell (the bottom half, closest to where they sit).
-     * Always available, never registered through content.
+     * The implicit table surface: the per-seat free zone keeps the player's
+     * front half of their cell (the bottom half, closest to where they sit).
      */
-    public static TableLayoutDefinition defaultLayout()
+    private static ZoneDefinition builtinFreeZone()
     {
-        return new TableLayoutDefinition(DEFAULT_LAYOUT_ID, null, List.of(
-                ZoneDefinition.builder(ZONE_DRAW_PILE)
-                        .kind(ZoneDefinition.Kind.STACK).scope(ZoneDefinition.Scope.SHARED)
-                        .rect(0.02F, 0.02F, 0.05F, 0.10F).build(),
-                ZoneDefinition.builder(ZONE_DISCARD_PILE)
-                        .kind(ZoneDefinition.Kind.STACK).scope(ZoneDefinition.Scope.SHARED)
-                        .rect(0.0F, 0.0F, 1.0F, 1.0F).build(),
-                ZoneDefinition.builder(ZONE_FREE)
-                        .kind(ZoneDefinition.Kind.FREE).scope(ZoneDefinition.Scope.PER_SEAT)
-                        .rect(0.0F, 0.5F, 1.0F, 0.5F).build()));
+        return ZoneDefinition.builder(ZONE_FREE)
+                .kind(ZoneDefinition.Kind.FREE).scope(ZoneDefinition.Scope.PER_SEAT)
+                .rect(0.0F, 0.5F, 1.0F, 0.5F).build();
     }
 
     public static final class Builder
@@ -181,6 +256,8 @@ public final class TableLayoutDefinition
         @Nullable
         private Component displayName;
         private final List<ZoneDefinition> zones = new ArrayList<>();
+        private final List<TableActionDefinition> actions = new ArrayList<>();
+        private final Map<String, ResourceLocation> initialZones = new LinkedHashMap<>();
 
         private Builder(ResourceLocation id)
         {
@@ -210,6 +287,34 @@ public final class TableLayoutDefinition
                 }
             }
             this.zones.add(zone);
+            return this;
+        }
+
+        /** Appends one action; duplicate action ids are rejected. */
+        public Builder action(TableActionDefinition action)
+        {
+            Objects.requireNonNull(action, "action");
+            for (TableActionDefinition existing : this.actions)
+            {
+                if (existing.id().equals(action.id()))
+                {
+                    throw new IllegalArgumentException("Duplicate action id in layout " + this.id + ": " + action.id());
+                }
+            }
+            this.actions.add(action);
+            return this;
+        }
+
+        /**
+         * Declares the stock pile for a card-set selector. Content must at
+         * least declare the {@value #INITIAL_DEFAULT_KEY} entry; the target
+         * should be a STACK zone of this layout (checked at normalization).
+         */
+        public Builder initial(String selector, ResourceLocation zoneId)
+        {
+            Objects.requireNonNull(selector, "selector");
+            Objects.requireNonNull(zoneId, "zoneId");
+            this.initialZones.put(selector, zoneId);
             return this;
         }
 

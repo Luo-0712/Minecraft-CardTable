@@ -13,7 +13,9 @@ import net.minecraftforge.network.simple.SimpleChannel;
 public final class NetworkHandler
 {
     // "2": content pack handshake (request/list) added in the card content phase.
-    private static final String PROTOCOL_VERSION = "3";
+    // "3": open zone ids in the action packet.
+    // "4": Perform replaces Draw/Shuffle — the action table is pack-declared.
+    private static final String PROTOCOL_VERSION = "4";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(CardTableMod.MODID, "main"),

@@ -112,7 +112,6 @@ class TableGroupStateTest
     void oldSaveWithDeckDerivesActiveSet()
     {
         TableGroupState state = TableGroupState.create();
-        state.getDrawPile().add(new CardInstance(new ResourceLocation("cardtable", "ace_of_spades")));
         // Simulate the deck item's saved tag (setDeckStack would need the item
         // registry, so write the serialized shape directly).
         CompoundTag deckTag = new CompoundTag();
