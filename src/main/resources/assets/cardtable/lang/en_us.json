@@ -69,6 +69,8 @@
   "gui.cardtable.layout_missing": "Layout missing, using default layout",
   "gui.cardtable.active_set": "Set: %s",
   "gui.cardtable.active_layout": "Layout: %s",
+  "key.cardtable.category": "Card Table",
+  "key.cardtable.toggle_inventory": "Toggle Backpack",
   "item.cardtable.deck": "Card Deck",
   "item.cardtable.deck_cards": "%s cards",
   "item.cardtable.deck_missing": "Content pack missing",

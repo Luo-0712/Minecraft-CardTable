@@ -154,9 +154,12 @@ public final class TableLayoutDefinition
     }
 
     /**
-     * The built-in default layout: replicates the current fixed placement —
-     * draw pile top-left, discard pile top-right, free zone covering the
-     * whole seat cell. Always available, never registered through content.
+     * The built-in default layout: draw pile top-left; discard pile covering
+     * the whole playfield, so any drop outside the hand strip, the draw pile
+     * or a seat's free area discards the card (the pile itself renders at the
+     * playfield's centre); the per-seat free zone keeps the player's front
+     * half of their cell (the bottom half, closest to where they sit).
+     * Always available, never registered through content.
      */
     public static TableLayoutDefinition defaultLayout()
     {
@@ -166,10 +169,10 @@ public final class TableLayoutDefinition
                         .rect(0.02F, 0.02F, 0.05F, 0.10F).build(),
                 ZoneDefinition.builder(ZONE_DISCARD_PILE)
                         .kind(ZoneDefinition.Kind.STACK).scope(ZoneDefinition.Scope.SHARED)
-                        .rect(0.93F, 0.02F, 0.05F, 0.10F).build(),
+                        .rect(0.0F, 0.0F, 1.0F, 1.0F).build(),
                 ZoneDefinition.builder(ZONE_FREE)
                         .kind(ZoneDefinition.Kind.FREE).scope(ZoneDefinition.Scope.PER_SEAT)
-                        .rect(0.0F, 0.0F, 1.0F, 1.0F).build()));
+                        .rect(0.0F, 0.5F, 1.0F, 0.5F).build()));
     }
 
     public static final class Builder

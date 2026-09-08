@@ -6,6 +6,7 @@ import com.example.cardtable.client.screen.CardTableScreen;
 import com.example.cardtable.menu.ModMenus;
 import net.minecraft.client.gui.screens.MenuScreens;
 import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
@@ -26,5 +27,11 @@ public final class ClientModEvents
             // textures land in the texture manager before any card renders.
             CardTextureResolver.registerDynamicTextures();
         });
+    }
+
+    @SubscribeEvent
+    public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event)
+    {
+        event.register(ModKeyBindings.TOGGLE_INVENTORY);
     }
 }

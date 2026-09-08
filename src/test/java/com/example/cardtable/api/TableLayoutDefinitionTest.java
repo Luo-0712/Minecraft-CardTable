@@ -42,9 +42,16 @@ class TableLayoutDefinitionTest
         assertEquals(0.02F, normalized.zone(TableLayoutDefinition.ZONE_DRAW_PILE).y());
         assertEquals(0.05F, normalized.zone(TableLayoutDefinition.ZONE_DRAW_PILE).w());
         assertEquals(0.10F, normalized.zone(TableLayoutDefinition.ZONE_DRAW_PILE).h());
-        assertEquals(0.93F, normalized.zone(TableLayoutDefinition.ZONE_DISCARD_PILE).x());
+        assertEquals(0.0F, normalized.zone(TableLayoutDefinition.ZONE_DISCARD_PILE).x());
+        assertEquals(0.0F, normalized.zone(TableLayoutDefinition.ZONE_DISCARD_PILE).y());
+        // The default discard pile covers the whole playfield: any drop that
+        // misses the hand strip, the draw pile and a seat's free area discards.
+        assertEquals(1.0F, normalized.zone(TableLayoutDefinition.ZONE_DISCARD_PILE).w());
+        assertEquals(1.0F, normalized.zone(TableLayoutDefinition.ZONE_DISCARD_PILE).h());
+        // The per-seat free zone keeps the player's front half of their cell.
+        assertEquals(0.5F, normalized.zone(TableLayoutDefinition.ZONE_FREE).y());
         assertEquals(1.0F, normalized.zone(TableLayoutDefinition.ZONE_FREE).w());
-        assertEquals(1.0F, normalized.zone(TableLayoutDefinition.ZONE_FREE).h());
+        assertEquals(0.5F, normalized.zone(TableLayoutDefinition.ZONE_FREE).h());
     }
 
     @Test
@@ -58,8 +65,9 @@ class TableLayoutDefinitionTest
         assertEquals(4, normalized.zones().size());
         assertEquals(0.2F, normalized.zone(new ResourceLocation("test", "battlefield")).x());
         assertEquals(0.02F, normalized.zone(TableLayoutDefinition.ZONE_DRAW_PILE).x());
-        assertEquals(0.93F, normalized.zone(TableLayoutDefinition.ZONE_DISCARD_PILE).x());
+        assertEquals(1.0F, normalized.zone(TableLayoutDefinition.ZONE_DISCARD_PILE).w());
         assertEquals(0.0F, normalized.zone(TableLayoutDefinition.ZONE_FREE).x());
+        assertEquals(0.5F, normalized.zone(TableLayoutDefinition.ZONE_FREE).y());
     }
 
     @Test

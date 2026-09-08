@@ -11,6 +11,7 @@ import com.example.cardtable.card.CardInstance;
 import com.example.cardtable.card.SurfaceZone;
 import com.example.cardtable.card.ZoneState;
 import com.example.cardtable.client.ClientHandStore;
+import com.example.cardtable.client.ModKeyBindings;
 import com.example.cardtable.client.card.CardTextureResolver;
 import com.example.cardtable.menu.CardTableMenu;
 import com.example.cardtable.network.NetworkHandler;
@@ -51,7 +52,9 @@ import java.util.UUID;
  *
  * <p>The playfield is subdivided into one cell per table block (deterministic
  * order, same comparator as master election). Each cell renders its block's
- * surface cards; the group piles render at the playfield's top corners; the
+ * surface cards; zones render per the active layout (the default draw pile
+ * sits top-left while the discard pile covers the whole playfield, its stack
+ * rendering at the centre so any unmatched drop discards); the
  * occupant's hand renders as a fanned strip above the player inventory, and
  * the deck slot lives in the top-right corner. Surface and pile data come
  * from the synced block entities, the hand only from {@link ClientHandStore}.</p>
@@ -62,24 +65,26 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final ResourceLocation TABLE_TEXTURE =
             new ResourceLocation(CardTableMod.MODID, "textures/block/quartz_block_top.png");
 
-    /** Vanilla "generic_54" container panel, reused as the backpack background. */
-    private static final ResourceLocation INVENTORY_PANEL =
-            new ResourceLocation(CardTableMod.MODID, "textures/gui/generic_54.png");
-    // The panel artwork occupies only the top-left of the 256x256 atlas; the
-    // rest is transparent. Sizing the nine-slice to the full atlas made the
-    // right/bottom borders sample transparent pixels, so the visible panel
-    // fell short of the slot grid.
-    private static final int INVENTORY_PANEL_TEX_WIDTH = 176;
-    private static final int INVENTORY_PANEL_TEX_HEIGHT = 222;
-    /** Nine-slice border of the panel artwork, in source pixels (1px outline + 2px highlight). */
-    private static final int INVENTORY_PANEL_BORDER = 3;
-    /** Flat interior strip (title area above the slot grid) stretched into the nine-slice centre. */
-    private static final int INVENTORY_PANEL_FILL_U = 64;
-    private static final int INVENTORY_PANEL_FILL_V = 8;
-    private static final int INVENTORY_PANEL_FILL_WIDTH = 32;
-    private static final int INVENTORY_PANEL_FILL_HEIGHT = 4;
-    /** Gap between the slot grid and the panel edge. */
-    private static final int INVENTORY_PANEL_PADDING = 8;
+    // Vanilla inventory atlas; the backpack rows (3 main rows + hotbar) are the
+    // bottom band of the 176x166 container panel, so one blit of the region
+    // (0, 83, 176, 83) reproduces the exact vanilla look without the player
+    // model, armour slots or crafting grid.
+    private static final ResourceLocation VANILLA_INVENTORY_ATLAS =
+            new ResourceLocation("textures/gui/container/inventory.png");
+    /** Atlas rect of the backpack band: from the row separator down to the panel bottom border. */
+    private static final int INVENTORY_BAND_U = 0;
+    private static final int INVENTORY_BAND_V = 83;
+    private static final int INVENTORY_BAND_WIDTH = 176;
+    private static final int INVENTORY_BAND_HEIGHT = 83;
+    /** First main-inventory slot offset inside the band (vanilla grid origin). */
+    private static final int INVENTORY_MAIN_SLOT_OFFSET = 8;
+    /**
+     * Atlas rows above the band that still belong to the panel frame: the
+     * vanilla top border (rounded corners included) plus a few px of plain
+     * background. V=0..6 is border + empty space; the armour slot recesses
+     * only start at V=8, so nothing unrelated leaks into the cap.
+     */
+    private static final int INVENTORY_CAP_HEIGHT = 7;
 
     private static final int SEAT_SIZE = 26;
     /** Seat ring inset from the screen edges. */
@@ -117,6 +122,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int COLOR_PANEL = 0x90241C14;
     private static final int COLOR_PANEL_EDGE = 0xFF6B4A2F;
 
+    /** Height of the soft fade band blending board content into the screen edge. */
+    private static final int EDGE_FADE_HEIGHT = 36;
+    /** Semi-transparent dark-wood tint used by the edge fade (matches the rim). */
+    private static final int COLOR_EDGE_FADE = 0xB23A2A1A;
+
     private final Map<UUID, Player> resolvedPlayers = new HashMap<>();
     private long cachedVersion = -1L;
 
@@ -142,7 +152,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     // degrades to the default layout and the status line warns about it.
     private boolean layoutMissing;
 
-    // Inventory layout, written by layoutSlots() and reused by the hand strip.
+    // Inventory layout, written by layoutSlots() and reused by the hand strip
+    // and the vanilla-style backpack panel.
+    private int inventoryPanelLeft;
+    private int inventoryPanelTop;
     private int inventoryLeft;
     private int inventoryMainTop;
     private int inventoryHotbarTop;
@@ -172,16 +185,21 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     // Slot positions are irrelevant server-side; only the client lays them
     // out (deck slot top-right, player inventory bottom-centre). Slot.x/y are
-    // mutable through the project's access transformer.
+    // mutable through the project's access transformer. The inventory grid is
+    // anchored to a vanilla backpack panel (see renderInventoryPanel), so the
+    // panel origin and the 18px slot grid share one source of truth.
     private void layoutSlots()
     {
         this.menu.getDeckSlot().x = this.width - SLOT_SIZE - 12;
         this.menu.getDeckSlot().y = 12;
 
-        int inventoryWidth = 9 * SLOT_SIZE;
-        this.inventoryLeft = this.width / 2 - inventoryWidth / 2;
-        this.inventoryHotbarTop = this.height - SLOT_SIZE - 6;
-        this.inventoryMainTop = this.inventoryHotbarTop - 3 * SLOT_SIZE;
+        // Bottom-centre the vanilla backpack band; the slot grid then aligns to
+        // the atlas offsets (main row at +84, hotbar at +142, band starts at +83).
+        this.inventoryPanelLeft = this.width / 2 - INVENTORY_BAND_WIDTH / 2;
+        this.inventoryPanelTop = this.height - INVENTORY_BAND_HEIGHT - 6;
+        this.inventoryLeft = this.inventoryPanelLeft + INVENTORY_MAIN_SLOT_OFFSET;
+        this.inventoryMainTop = this.inventoryPanelTop + (84 - INVENTORY_BAND_V);
+        this.inventoryHotbarTop = this.inventoryPanelTop + (142 - INVENTORY_BAND_V);
 
         // When the inventory is hidden (default) its slots are pushed far
         // off-screen: Slot.x/y are mutable via the project's access transformer,
@@ -201,6 +219,15 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             slot.x = this.inventoryLeft + (index - 27) * SLOT_SIZE + offset;
             slot.y = this.inventoryHotbarTop;
         }
+    }
+
+    // Single toggle entry shared by the backpack button and the configurable
+    // key. Flipping the flag then relaying keeps the panel, the slot grid and
+    // the hand strip in sync; purely a client view state, never synced.
+    private void toggleInventory()
+    {
+        this.showInventory = !this.showInventory;
+        this.layoutSlots();
     }
 
     // The fullscreen table draws no menu labels: the surface itself is the UI.
@@ -345,6 +372,28 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         this.renderInventoryPanel(graphics);
         this.renderDeckSlotBackground(graphics);
         this.renderZones(graphics, mouseX, mouseY);
+        this.renderTopFade(graphics);
+    }
+
+    /**
+     * Soft fade band across the top of the playfield. The topmost card rows
+     * run into the window edge on short screens and the hard cut looks abrupt;
+     * melting them into a dark wood tint reads as a deliberate vignette. The
+     * band stops at the playfield's side edges so the deck slot and backpack
+     * toggle (outside it, top-right) stay crisp. Drawn as the last playfield
+     * pass so every card participates, while seats and the hand strip
+     * (rendered after {@code renderBg}) are untouched.
+     */
+    private void renderTopFade(GuiGraphics graphics)
+    {
+        int fadeHeight = Math.min(EDGE_FADE_HEIGHT, this.height / 5);
+        if (fadeHeight <= 1)
+        {
+            return;
+        }
+        int playLeft = playfieldLeft();
+        graphics.fillGradient(playLeft, this.topPos, playLeft + playfieldWidth(), this.topPos + fadeHeight,
+                COLOR_EDGE_FADE, 0x00000000);
     }
 
     private void renderDeckSlotBackground(GuiGraphics graphics)
@@ -359,8 +408,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
         // Backpack toggle button directly under the deck slot. Drawn every frame
         // so its hit rect stays in sync with the (resize-aware) deck slot position.
+        // The label shows the current (rebindable) key so players see the shortcut.
         Component toggleLabel = Component.translatable(this.showInventory
-                ? "gui.cardtable.inv_hide" : "gui.cardtable.inv_show");
+                ? "gui.cardtable.inv_hide" : "gui.cardtable.inv_show")
+                .append(" [")
+                .append(ModKeyBindings.TOGGLE_INVENTORY.getTranslatedKeyMessage())
+                .append("]");
         int toggleW = this.font.width(toggleLabel) + 10;
         int toggleH = 14;
         int toggleX = deckSlot.x;
@@ -373,54 +426,31 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 toggleY + (toggleH - this.font.lineHeight) / 2, COLOR_TEXT_DARK, false);
     }
 
-    // The backpack panel wraps the slot grid (its layout vars stay on-screen even
-    // while the slots themselves are pushed off-screen when hidden). Only drawn
-    // while the inventory toggle is on, so it disappears with the slots.
+    // Vanilla-style backpack panel: one blit of the inventory atlas's bottom
+    // band reproduces the exact vanilla border and slot recesses, minus the
+    // player model / armour / crafting grid (which live above row V=83). The
+    // band alone is a hard horizontal cut at its top edge, so a second blit of
+    // the atlas's top border rows (V=0..6) is stacked directly above it to
+    // supply the rounded-corner frame and shadow the band lacks. Only drawn
+    // while the toggle is on, so it disappears together with the slots.
     private void renderInventoryPanel(GuiGraphics graphics)
     {
         if (!this.showInventory)
         {
             return;
         }
-        int panelLeft = this.inventoryLeft - INVENTORY_PANEL_PADDING;
-        int panelTop = this.inventoryMainTop - INVENTORY_PANEL_PADDING;
-        int panelRight = this.inventoryLeft + 9 * SLOT_SIZE + INVENTORY_PANEL_PADDING;
-        int panelBottom = this.inventoryHotbarTop + SLOT_SIZE + INVENTORY_PANEL_PADDING;
-        this.blitNineSliced(graphics, INVENTORY_PANEL, panelLeft, panelTop,
-                panelRight - panelLeft, panelBottom - panelTop);
-    }
-
-    // Manual nine-slice: stretch the panel artwork to any rect while keeping
-    // its border crisp. 1.20.1's GuiGraphics has no public blitNineSliced, so
-    // the 9 regions are drawn with plain blits (corners, edges, centre). The
-    // centre is sampled from the flat title strip, not the slot-grid interior,
-    // so stretching it never leaks the vanilla chest grid into the panel.
-    private void blitNineSliced(GuiGraphics graphics, ResourceLocation texture, int x, int y, int w, int h)
-    {
-        int b = INVENTORY_PANEL_BORDER;
-        int texW = INVENTORY_PANEL_TEX_WIDTH;
-        int texH = INVENTORY_PANEL_TEX_HEIGHT;
-        int midW = texW - b * 2;
-        int midH = texH - b * 2;
-        int innerW = Math.max(0, w - b * 2);
-        int innerH = Math.max(0, h - b * 2);
-
-        // Corners.
-        graphics.blit(texture, x, y, b, b, 0.0F, 0.0F, b, b, texW, texH);
-        graphics.blit(texture, x + w - b, y, b, b, (float) (texW - b), 0.0F, b, b, texW, texH);
-        graphics.blit(texture, x, y + h - b, b, b, 0.0F, (float) (texH - b), b, b, texW, texH);
-        graphics.blit(texture, x + w - b, y + h - b, b, b, (float) (texW - b), (float) (texH - b), b, b, texW, texH);
-
-        // Edges (stretch along their length).
-        graphics.blit(texture, x + b, y, innerW, b, (float) b, 0.0F, midW, b, texW, texH);
-        graphics.blit(texture, x + b, y + h - b, innerW, b, (float) b, (float) (texH - b), midW, b, texW, texH);
-        graphics.blit(texture, x, y + b, b, innerH, 0.0F, (float) b, b, midH, texW, texH);
-        graphics.blit(texture, x + w - b, y + b, b, innerH, (float) (texW - b), (float) b, b, midH, texW, texH);
-
-        // Centre (stretch the flat strip both ways).
-        graphics.blit(texture, x + b, y + b, innerW, innerH,
-                (float) INVENTORY_PANEL_FILL_U, (float) INVENTORY_PANEL_FILL_V,
-                INVENTORY_PANEL_FILL_WIDTH, INVENTORY_PANEL_FILL_HEIGHT, texW, texH);
+        // Top border cap: rounded corners + frame + drop shadow, sitting flush
+        // above the band so the two read as one complete vanilla container.
+        graphics.blit(VANILLA_INVENTORY_ATLAS,
+                this.inventoryPanelLeft, this.inventoryPanelTop - INVENTORY_CAP_HEIGHT,
+                INVENTORY_BAND_WIDTH, INVENTORY_CAP_HEIGHT,
+                (float) INVENTORY_BAND_U, 0.0F,
+                INVENTORY_BAND_WIDTH, INVENTORY_CAP_HEIGHT, 256, 256);
+        graphics.blit(VANILLA_INVENTORY_ATLAS,
+                this.inventoryPanelLeft, this.inventoryPanelTop,
+                INVENTORY_BAND_WIDTH, INVENTORY_BAND_HEIGHT,
+                (float) INVENTORY_BAND_U, (float) INVENTORY_BAND_V,
+                INVENTORY_BAND_WIDTH, INVENTORY_BAND_HEIGHT, 256, 256);
     }
 
     // Layout-driven playfield rendering -------------------------------------
@@ -522,14 +552,24 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             {
                 count--; // pile top is on the mouse
             }
-            Rect hit = pileRect(rect.x(), rect.y());
-            hits.add(new ZoneHit(zone, sectionPos, rect, hit));
-            this.renderPile(graphics, count, rect.x(), rect.y());
+            // A pile is anchored at the centre of its zone rect: for a corner
+            // pile (draw) that is nearly the corner itself, while a zone that
+            // covers the whole playfield (the default discard pile) lands in
+            // the middle of the table.
+            Rect pileRect = pileRect(rect.x() + (rect.width() - CARD_WIDTH) / 2,
+                    rect.y() + (rect.height() - CARD_HEIGHT) / 2);
+            // Drop capture is the whole zone rect, not just the visible stack:
+            // this is what lets a full-playfield discard pile catch every
+            // otherwise-unmatched drop. Grabbing the top card still uses the
+            // small pile rect (see the rendered-card entry below).
+            hits.add(new ZoneHit(zone, sectionPos, rect, rect));
+            this.renderPile(graphics, count, pileRect.x(), pileRect.y());
             this.drawZoneLabel(graphics, zone, rect);
             if (!pile.isEmpty())
             {
                 // The whole stack is grabbable; hover resolves to its top card.
-                cards.add(new RenderedCard(pile.get(pile.size() - 1), hit.x(), hit.y(), hit.width(), hit.height()));
+                cards.add(new RenderedCard(pile.get(pile.size() - 1), pileRect.x(), pileRect.y(),
+                        pileRect.width(), pileRect.height()));
             }
             return;
         }
@@ -1097,38 +1137,62 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             }
             return;
         }
-        // Layout zones in reverse render order: the visually topmost zone wins.
-        for (int index = this.zoneHits.size() - 1; index >= 0; index--)
+        // Layout zones: the most specific hit wins. A pile's hit rect is small
+        // (the draw corner), a seat's free area is medium, and a zone that
+        // covers the whole playfield (the default discard pile) is the catch
+        // all, so picking the smallest hit area routes drops to the narrowest
+        // intent first. Equal areas keep the classic "visually topmost wins".
+        ZoneHit target = this.pickZoneHit(mouseX, mouseY);
+        if (target == null)
         {
-            ZoneHit hit = this.zoneHits.get(index);
+            // No valid target: drop cancels, the authoritative state is unchanged.
+            return;
+        }
+        ZoneDefinition zone = target.zone();
+        if (zone.kind() == ZoneDefinition.Kind.STACK)
+        {
+            this.sendAction(new CardActionPacket.Action.Move(instanceId,
+                    new ZoneRef(zone.id(), target.sectionPos()), null));
+            return;
+        }
+        float x = normalizeDrop(mouseX, target.rect().x(), target.rect().width());
+        float y = normalizeDrop(mouseY, target.rect().y(), target.rect().height());
+        if (zone.kind() == ZoneDefinition.Kind.GRID)
+        {
+            // Client-side quantization for instant feedback; the
+            // server re-quantizes idempotently (same slot wins).
+            float[] snapped = ZoneDefinition.quantizeGrid(x, y, zone.capacity());
+            x = snapped[0];
+            y = snapped[1];
+        }
+        this.sendAction(new CardActionPacket.Action.Move(instanceId,
+                new ZoneRef(zone.id(), target.sectionPos()), new Vec2(x, y)));
+    }
+
+    /**
+     * The drop target under the mouse: among every zone whose hit rect covers
+     * the point, the one with the smallest hit area wins (most specific);
+     * ties resolve to the visually topmost, i.e. the later render entry.
+     */
+    @Nullable
+    private ZoneHit pickZoneHit(double mouseX, double mouseY)
+    {
+        ZoneHit best = null;
+        long bestArea = Long.MAX_VALUE;
+        for (ZoneHit hit : this.zoneHits)
+        {
             if (!hit.hitRect().contains(mouseX, mouseY))
             {
                 continue;
             }
-            ZoneDefinition zone = hit.zone();
-            if (zone.kind() == ZoneDefinition.Kind.STACK)
+            long area = (long) hit.hitRect().width() * hit.hitRect().height();
+            if (area <= bestArea)
             {
-                this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                        new ZoneRef(zone.id(), hit.sectionPos()), null));
+                bestArea = area;
+                best = hit;
             }
-            else
-            {
-                float x = normalizeDrop(mouseX, hit.rect().x(), hit.rect().width());
-                float y = normalizeDrop(mouseY, hit.rect().y(), hit.rect().height());
-                if (zone.kind() == ZoneDefinition.Kind.GRID)
-                {
-                    // Client-side quantization for instant feedback; the
-                    // server re-quantizes idempotently (same slot wins).
-                    float[] snapped = ZoneDefinition.quantizeGrid(x, y, zone.capacity());
-                    x = snapped[0];
-                    y = snapped[1];
-                }
-                this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                        new ZoneRef(zone.id(), hit.sectionPos()), new Vec2(x, y)));
-            }
-            return;
         }
-        // No valid target: drop cancels, the authoritative state is unchanged.
+        return best;
     }
 
     private static float normalizeDrop(double value, int zoneStart, int zoneSize)
@@ -1148,6 +1212,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers)
     {
+        // Rebindable backpack toggle (default B). Checked first so a custom
+        // binding never collides with the hardcoded card shortcuts below.
+        if (ModKeyBindings.TOGGLE_INVENTORY.matches(keyCode, scanCode))
+        {
+            this.toggleInventory();
+            return true;
+        }
         if (keyCode == GLFW.GLFW_KEY_F3)
         {
             this.showDebugInfo = !this.showDebugInfo;
@@ -1194,8 +1265,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             // slots back on-screen (or off-screen) to match the new state.
             if (this.inventoryToggleRect != null && this.inventoryToggleRect.contains(mouseX, mouseY))
             {
-                this.showInventory = !this.showInventory;
-                this.layoutSlots();
+                this.toggleInventory();
                 return true;
             }
             CardInstance hovered = hoveredCard(mouseX, mouseY);
