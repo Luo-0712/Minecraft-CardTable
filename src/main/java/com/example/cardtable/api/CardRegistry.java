@@ -22,6 +22,7 @@ public final class CardRegistry
 {
     private static volatile Map<ResourceLocation, CardDefinition> cards = Map.of();
     private static volatile Map<ResourceLocation, CardSetDefinition> sets = Map.of();
+    private static volatile Map<ResourceLocation, TableLayoutDefinition> layouts = Map.of();
 
     private CardRegistry()
     {
@@ -35,8 +36,21 @@ public final class CardRegistry
     public static void load(Map<ResourceLocation, CardDefinition> loadedCards,
                             Map<ResourceLocation, CardSetDefinition> loadedSets)
     {
+        load(loadedCards, loadedSets, Map.of());
+    }
+
+    /**
+     * Installs the final content snapshot including table layouts. Internal:
+     * called exactly once by the core content pack loader after the
+     * registration event; no other caller may invoke this.
+     */
+    public static void load(Map<ResourceLocation, CardDefinition> loadedCards,
+                            Map<ResourceLocation, CardSetDefinition> loadedSets,
+                            Map<ResourceLocation, TableLayoutDefinition> loadedLayouts)
+    {
         cards = Map.copyOf(loadedCards);
         sets = Map.copyOf(loadedSets);
+        layouts = Map.copyOf(loadedLayouts);
     }
 
     @Nullable
@@ -85,5 +99,22 @@ public final class CardRegistry
     public static Collection<CardSetDefinition> allSets()
     {
         return Collections.unmodifiableCollection(sets.values());
+    }
+
+    /** The layout with the given id; does not include the built-in default layout. */
+    @Nullable
+    public static TableLayoutDefinition getLayout(@Nullable ResourceLocation id)
+    {
+        return id == null ? null : layouts.get(id);
+    }
+
+    public static Optional<TableLayoutDefinition> findLayout(@Nullable ResourceLocation id)
+    {
+        return Optional.ofNullable(getLayout(id));
+    }
+
+    public static Collection<TableLayoutDefinition> allLayouts()
+    {
+        return Collections.unmodifiableCollection(layouts.values());
     }
 }

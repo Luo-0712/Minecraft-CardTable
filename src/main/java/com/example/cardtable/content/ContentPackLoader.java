@@ -99,9 +99,11 @@ public final class ContentPackLoader
         loadFileSystemPacks(registration);
 
         modBus.post(registration);
-        CardRegistry.load(registration.cardsSnapshot(), registration.setsSnapshot());
-        LOGGER.info("Card content ready: {} pack(s), {} card(s), {} set(s)",
-                loadedPacks.size(), CardRegistry.all().size(), CardRegistry.allSets().size());
+        CardRegistry.load(registration.cardsSnapshot(), registration.setsSnapshot(),
+                registration.layoutsSnapshot());
+        LOGGER.info("Card content ready: {} pack(s), {} card(s), {} set(s), {} layout(s)",
+                loadedPacks.size(), CardRegistry.all().size(), CardRegistry.allSets().size(),
+                CardRegistry.allLayouts().size());
     }
 
     /** Packs loaded by this instance, in load order; used by the login handshake. */
@@ -216,9 +218,11 @@ public final class ContentPackLoader
                                  RegisterCardDefinitionsEvent event)
     {
         List<String> canonicalLines = new ArrayList<>();
+        boolean setRegistered = false;
         try
         {
             String setLine = CardDefinitionJsonCodec.registerSet(meta, textures, event::register);
+            setRegistered = setLine != null;
             if (setLine != null)
             {
                 canonicalLines.add(setLine);
@@ -227,6 +231,44 @@ public final class ContentPackLoader
         catch (Exception exception)
         {
             LOGGER.warn("Pack {}: skipping broken set declaration: {}", meta.id(), exception.toString());
+        }
+
+        // layout.json (format 2): registered under the pack id and implicitly
+        // referenced by the pack set. Without a set there is nothing to hang
+        // the layout on, so it is ignored with a warning.
+        byte[] layoutJson = null;
+        try
+        {
+            layoutJson = source.read("layout.json");
+        }
+        catch (IOException exception)
+        {
+            LOGGER.warn("Pack {}: failed to read layout.json: {}", meta.id(), exception.toString());
+        }
+        if (layoutJson != null)
+        {
+            if (!setRegistered)
+            {
+                LOGGER.warn("Pack {}: layout.json ignored because the pack declares no set", meta.id());
+            }
+            else
+            {
+                try
+                {
+                    JsonElement root = JsonParser.parseString(new String(layoutJson, StandardCharsets.UTF_8));
+                    CardDefinitionJsonCodec.ParsedLayout parsed = CardDefinitionJsonCodec.parseLayout(
+                            root, meta, LOGGER);
+                    if (parsed != null)
+                    {
+                        event.register(parsed.definition());
+                        canonicalLines.add(parsed.canonicalLine());
+                    }
+                }
+                catch (Exception exception)
+                {
+                    LOGGER.warn("Pack {}: skipping broken layout.json: {}", meta.id(), exception.toString());
+                }
+            }
         }
 
         int accepted = 0;

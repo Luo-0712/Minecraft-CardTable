@@ -2,13 +2,17 @@ package com.example.cardtable.table;
 
 import com.example.cardtable.card.CardInstance;
 import com.example.cardtable.card.SurfaceZone;
+import com.example.cardtable.card.ZoneState;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.resources.ResourceLocation;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -32,12 +36,16 @@ public final class TableSectionState
     private static final String VERSION_TAG = "Version";
     private static final String SURFACE_TAG = "Surface";
     private static final String HAND_TAG = "Hand";
+    private static final String ZONES_TAG = "Zones";
 
     @Nullable
     private UUID occupantId;
     private long version;
     private final SurfaceZone surface = new SurfaceZone();
     private final List<CardInstance> hand = new ArrayList<>();
+    // Layout-declared PER_SEAT zone instances for this seat (excluding the
+    // reserved hand/free built-ins, which keep their dedicated containers).
+    private final Map<ResourceLocation, ZoneState> seatZones = new LinkedHashMap<>();
 
     public TableSectionState()
     {
@@ -59,6 +67,18 @@ public final class TableSectionState
             state.surface.load(tag.getCompound(SURFACE_TAG));
         }
         state.hand.addAll(CardInstance.loadAll(tag.getList(HAND_TAG, Tag.TAG_COMPOUND)));
+        if (tag.contains(ZONES_TAG, Tag.TAG_COMPOUND))
+        {
+            CompoundTag zones = tag.getCompound(ZONES_TAG);
+            for (String key : zones.getAllKeys())
+            {
+                ZoneState zone = ZoneState.load(zones.getCompound(key));
+                if (zone != null)
+                {
+                    state.seatZones.put(new ResourceLocation(key), zone);
+                }
+            }
+        }
         return state;
     }
 
@@ -95,6 +115,12 @@ public final class TableSectionState
         tag.putLong(VERSION_TAG, this.version);
         tag.put(SURFACE_TAG, this.surface.save());
         tag.put(HAND_TAG, CardInstance.saveAll(this.hand));
+        if (!this.seatZones.isEmpty())
+        {
+            CompoundTag zones = new CompoundTag();
+            this.seatZones.forEach((id, zone) -> zones.put(id.toString(), zone.save()));
+            tag.put(ZONES_TAG, zones);
+        }
         return tag;
     }
 
@@ -177,5 +203,17 @@ public final class TableSectionState
             }
         }
         return null;
+    }
+
+    /** Layout-declared PER_SEAT zone instances for this seat (no built-ins). */
+    public Map<ResourceLocation, ZoneState> getSeatZones()
+    {
+        return this.seatZones;
+    }
+
+    /** Clears the generic seat zones (deck removal reset). */
+    public void resetSeatZones()
+    {
+        this.seatZones.clear();
     }
 }

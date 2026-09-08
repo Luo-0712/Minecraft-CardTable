@@ -17,12 +17,15 @@ public final class CardSetDefinition
     private final Component displayName;
     @Nullable
     private final ResourceLocation defaultBackTexture;
+    @Nullable
+    private final ResourceLocation layout;
 
     private CardSetDefinition(Builder builder)
     {
         this.id = builder.id;
         this.displayName = builder.displayName;
         this.defaultBackTexture = builder.defaultBackTexture;
+        this.layout = builder.layout;
     }
 
     public static Builder builder(ResourceLocation id)
@@ -48,6 +51,16 @@ public final class CardSetDefinition
         return this.defaultBackTexture;
     }
 
+    /**
+     * Layout this set runs on its table; {@code null} means the built-in
+     * {@code cardtable:default} layout (identical to the classic table).
+     */
+    @Nullable
+    public ResourceLocation layout()
+    {
+        return this.layout;
+    }
+
     @Override
     public String toString()
     {
@@ -60,6 +73,8 @@ public final class CardSetDefinition
         private Component displayName;
         @Nullable
         private ResourceLocation defaultBackTexture;
+        @Nullable
+        private ResourceLocation layout;
 
         private Builder(ResourceLocation id)
         {
@@ -75,6 +90,13 @@ public final class CardSetDefinition
         public Builder defaultBackTexture(@Nullable ResourceLocation defaultBackTexture)
         {
             this.defaultBackTexture = defaultBackTexture;
+            return this;
+        }
+
+        /** {@code null} (the default) resolves to the built-in {@code cardtable:default} layout. */
+        public Builder layout(@Nullable ResourceLocation layout)
+        {
+            this.layout = layout;
             return this;
         }
 

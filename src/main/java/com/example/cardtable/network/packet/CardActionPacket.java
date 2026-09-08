@@ -4,6 +4,7 @@ import com.example.cardtable.card.CardActionService;
 import com.example.cardtable.card.ZoneRef;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec2;
 import net.minecraftforge.network.NetworkEvent;
 
@@ -78,7 +79,8 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
         else if (action instanceof Action.Shuffle shuffle)
         {
             buffer.writeByte(KIND_SHUFFLE);
-            writeZone(buffer, shuffle.zone(), false);
+            // Shuffle targets any STACK zone; PER_SEAT ones need the section.
+            writeZone(buffer, shuffle.zone(), true);
         }
     }
 
@@ -97,7 +99,7 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
             case KIND_FLIP -> new Action.Flip(buffer.readUUID());
             case KIND_ROTATE -> new Action.Rotate(buffer.readUUID());
             case KIND_DRAW -> new Action.Draw(Math.max(1, Math.min(10, buffer.readVarInt())));
-            case KIND_SHUFFLE -> new Action.Shuffle(readZone(buffer, false));
+            case KIND_SHUFFLE -> new Action.Shuffle(readZone(buffer, true));
             default -> throw new IllegalStateException("Unknown card action kind: " + kind);
         };
         return new CardActionPacket(tablePosition, action);
@@ -112,12 +114,11 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
 
     private static void writeZone(FriendlyByteBuf buffer, ZoneRef zone, boolean withSectionPos)
     {
-        buffer.writeByte(zone.zone().ordinal());
-        // Group-level zones (the two shared piles) carry no section position at
-        // all, so their presence flag must not be written either: readZone()
-        // skips it for them via isGroupLevel(). Writing it unconditionally left
-        // one unconsumed byte per pile-targeted Move.
-        if (withSectionPos && !zone.zone().isGroupLevel())
+        // Open id addressing: the layout-declared zone id plus an optional
+        // seat section. Scope validation (SHARED needs no section, PER_SEAT
+        // needs one) happens server-side against the active layout.
+        buffer.writeResourceLocation(zone.zoneId());
+        if (withSectionPos)
         {
             writeNullablePos(buffer, zone.sectionPos());
         }
@@ -125,17 +126,10 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
 
     private static ZoneRef readZone(FriendlyByteBuf buffer, boolean withSectionPos)
     {
-        ZoneRef.Zone[] zones = ZoneRef.Zone.values();
-        byte ordinal = buffer.readByte();
-        if (ordinal < 0 || ordinal >= zones.length)
-        {
-            throw new IllegalStateException("Unknown zone ordinal: " + ordinal);
-        }
-        ZoneRef.Zone zone = zones[ordinal];
-        // Mirrors writeZone(): the presence flag only exists for section zones.
-        BlockPos sectionPos = withSectionPos && !zone.isGroupLevel() && buffer.readBoolean()
+        ResourceLocation zoneId = buffer.readResourceLocation();
+        BlockPos sectionPos = withSectionPos && buffer.readBoolean()
                 ? buffer.readBlockPos() : null;
-        return new ZoneRef(zone, sectionPos);
+        return new ZoneRef(zoneId, sectionPos);
     }
 
     private static void writeNullablePos(FriendlyByteBuf buffer, @Nullable BlockPos pos)

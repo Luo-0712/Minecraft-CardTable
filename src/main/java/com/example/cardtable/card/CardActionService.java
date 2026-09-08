@@ -1,5 +1,8 @@
 package com.example.cardtable.card;
 
+import com.example.cardtable.api.CardRegistry;
+import com.example.cardtable.api.TableLayoutDefinition;
+import com.example.cardtable.api.ZoneDefinition;
 import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.menu.CardTableMenu;
 import com.example.cardtable.network.packet.CardActionPacket;
@@ -7,6 +10,7 @@ import com.example.cardtable.table.TableGroupService;
 import com.example.cardtable.table.TableGroupState;
 import com.example.cardtable.table.TableSectionState;
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 
@@ -126,48 +130,130 @@ public final class CardActionService
         float x = move.surfacePos() != null ? move.surfacePos().x : DEFAULT_SURFACE_POS;
         float y = move.surfacePos() != null ? move.surfacePos().y : DEFAULT_SURFACE_POS;
 
-        switch (target.zone())
+        // Built-in zone ids keep their classic behavior; layout-declared ids
+        // run through the layout dictionary validation chain first.
+        ResourceLocation zoneId = target.zoneId();
+        if (TableLayoutDefinition.ZONE_DRAW_PILE.equals(zoneId))
         {
-            case DRAW_PILE ->
+            located.removeFromZone().run();
+            groupState.addToDrawPileTop(located.card());
+            return true;
+        }
+        if (TableLayoutDefinition.ZONE_DISCARD_PILE.equals(zoneId))
+        {
+            located.removeFromZone().run();
+            // A played card leaves its owner's hidden hand, so the discard
+            // pile shows it face up; the pile is the table's public record
+            // of what has been played. F can still turn it back over.
+            located.card().setFaceUp(true);
+            groupState.addToDiscardPileTop(located.card());
+            return true;
+        }
+        if (TableLayoutDefinition.ZONE_FREE.equals(zoneId) || TableLayoutDefinition.ZONE_HAND.equals(zoneId))
+        {
+            TableSectionState section = sectionState(level, group, target.sectionPos());
+            if (section == null)
             {
-                located.removeFromZone().run();
-                groupState.addToDrawPileTop(located.card());
-                return true;
+                return false;
             }
-            case DISCARD_PILE ->
+            if (TableLayoutDefinition.ZONE_HAND.equals(zoneId)
+                    && !actor.getUUID().equals(section.getOccupantId()))
             {
-                located.removeFromZone().run();
-                // A played card leaves its owner's hidden hand, so the discard
-                // pile shows it face up; the pile is the table's public record
-                // of what has been played. F can still turn it back over.
-                located.card().setFaceUp(true);
-                groupState.addToDiscardPileTop(located.card());
-                return true;
+                return false; // Cards may only enter one's own hand.
             }
-            case SURFACE ->
+            located.removeFromZone().run();
+            if (TableLayoutDefinition.ZONE_FREE.equals(zoneId))
             {
-                TableSectionState section = sectionState(level, group, target.sectionPos());
-                if (section == null)
-                {
-                    return false;
-                }
-                located.removeFromZone().run();
                 section.getSurface().add(located.card(), x, y);
-                return true;
             }
-            case HAND ->
+            else
             {
-                TableSectionState section = sectionState(level, group, target.sectionPos());
-                if (section == null || !actor.getUUID().equals(section.getOccupantId()))
-                {
-                    return false; // Cards may only enter one's own hand.
-                }
-                located.removeFromZone().run();
                 section.addHandCard(located.card());
-                return true;
+            }
+            return true;
+        }
+        // Layout-declared zones: validate against the active layout dictionary
+        // before touching any state. Unknown ids are silently rejected (and
+        // never bump the version), so a stale client cannot corrupt anything.
+        TableLayoutDefinition layout = resolveLayout(groupState);
+        if (layout == null)
+        {
+            return false;
+        }
+        ZoneDefinition definition = layout.zone(zoneId);
+        if (definition == null)
+        {
+            return false; // not in the active layout dictionary
+        }
+        // Scope match: SHARED must not carry a seat section, PER_SEAT must
+        // carry one that belongs to this table group.
+        if (definition.scope() == ZoneDefinition.Scope.SHARED)
+        {
+            if (target.sectionPos() != null)
+            {
+                return false;
             }
         }
-        return false;
+        else if (target.sectionPos() == null || sectionState(level, group, target.sectionPos()) == null)
+        {
+            return false;
+        }
+        // Capacity is a layout rule checked against the target container.
+        ZoneState zone = definition.scope() == ZoneDefinition.Scope.SHARED
+                ? groupState.getSharedZones().get(zoneId)
+                : (sectionState(level, group, target.sectionPos()) == null
+                   || sectionState(level, group, target.sectionPos()).getSeatZones() == null
+                   || sectionState(level, group, target.sectionPos()).getSeatZones().get(zoneId) == null
+                   ? null
+                   : sectionState(level, group, target.sectionPos()).getSeatZones().get(zoneId));
+        if (zone == null)
+        {
+            return false; // container missing: layout/state divergence, stay safe
+        }
+        if (definition.capacity() > 0 && zone.size() >= definition.capacity())
+        {
+            return false; // zone full
+        }
+        // Kind match: STACK ignores coordinates, PLACED (GRID/FREE) needs a
+        // position which is clamped into 0..1 by the container itself.
+        if (zone.storage() == ZoneState.Storage.STACK)
+        {
+            located.removeFromZone().run();
+            zone.addToStackTop(located.card());
+            return true;
+        }
+        if (move.surfacePos() == null)
+        {
+            return false; // placed zones require a position
+        }
+        // GRID drops snap to a slot center; the client may pre-quantize and the
+        // idempotent helper lands on the same slot (FREE keeps the raw point).
+        if (definition.kind() == ZoneDefinition.Kind.GRID)
+        {
+            float[] snapped = ZoneDefinition.quantizeGrid(x, y, definition.capacity());
+            x = snapped[0];
+            y = snapped[1];
+        }
+        located.removeFromZone().run();
+        zone.addPlaced(located.card(), x, y);
+        return true;
+    }
+
+    /**
+     * The layout the table currently runs, resolved from the group's binding.
+     * Falls back to the built-in default (the classic placement) when no
+     * layout is bound; returns {@code null} only when a bound layout vanished
+     * from the registry, in which case layout-declared ids are rejected.
+     */
+    private static TableLayoutDefinition resolveLayout(TableGroupState groupState)
+    {
+        ResourceLocation layoutId = groupState.getActiveLayoutId();
+        if (layoutId == null)
+        {
+            return TableLayoutDefinition.defaultLayout();
+        }
+        TableLayoutDefinition layout = CardRegistry.getLayout(layoutId);
+        return layout != null ? layout.normalized() : null;
     }
 
     // Draw / shuffle ---------------------------------------------------------
@@ -202,24 +288,66 @@ public final class CardActionService
     private static boolean shuffle(Level level, TableGroupService.GroupView group,
                                    CardActionPacket.Action.Shuffle shuffle)
     {
-        if (shuffle.zone().zone() != ZoneRef.Zone.DRAW_PILE)
+        ResourceLocation shuffleZoneId = shuffle.zone().zoneId();
+        if (TableLayoutDefinition.ZONE_DRAW_PILE.equals(shuffleZoneId))
         {
-            return false;
+            // Classic draw pile shuffle (unchanged behavior).
+            TableGroupState groupState = groupState(level, group);
+            if (groupState == null)
+            {
+                return false;
+            }
+            // Server-side randomness only; the resulting order travels through
+            // the normal sync path, clients never shuffle. Fisher-Yates over
+            // the pile (RandomSource is not a java.util.Random).
+            List<CardInstance> pile = groupState.getDrawPile();
+            for (int index = pile.size() - 1; index > 0; index--)
+            {
+                Collections.swap(pile, index, level.getRandom().nextInt(index + 1));
+            }
+            return true;
         }
-        TableGroupState groupState = groupState(level, group);
-        if (groupState == null)
+        // Generalized shuffle (Phase 3): any STACK zone in the active layout
+        // may be shuffled; SHARED needs no seat section.
         {
-            return false;
+            // Generalized shuffle (Phase 3): any STACK zone in the active
+            // layout may be shuffled; SHARED needs no seat section.
+            TableGroupState groupState = groupState(level, group);
+            TableLayoutDefinition layout = groupState == null ? null : resolveLayout(groupState);
+            ZoneDefinition definition = layout == null ? null : layout.zone(shuffleZoneId);
+            if (definition == null || definition.kind() != ZoneDefinition.Kind.STACK)
+            {
+                return false;
+            }
+            if (definition.scope() == ZoneDefinition.Scope.PER_SEAT
+                    && (shuffle.zone().sectionPos() == null
+                        || sectionState(level, group, shuffle.zone().sectionPos()) == null))
+            {
+                return false;
+            }
+            ZoneState zone = definition.scope() == ZoneDefinition.Scope.SHARED
+                    ? groupState.getSharedZones().get(shuffleZoneId)
+                    : sectionState(level, group, shuffle.zone().sectionPos()).getSeatZones().get(shuffleZoneId);
+            if (zone == null || zone.storage() != ZoneState.Storage.STACK)
+            {
+                return false;
+            }
+            shuffleList(zone.stackCards());
+            groupState.bumpVersion();
+            TableGroupService.syncGroup(level, group);
+            return true;
         }
+    }
+
+    private static void shuffleList(List<CardInstance> list)
+    {
         // Server-side randomness only; the resulting order travels through
-        // the normal sync path, clients never shuffle. Fisher-Yates over the
-        // pile (RandomSource is not a java.util.Random).
-        List<CardInstance> pile = groupState.getDrawPile();
-        for (int index = pile.size() - 1; index > 0; index--)
+        // the normal sync path, clients never shuffle. Fisher-Yates
+        // (RandomSource is not a java.util.Random).
+        for (int index = list.size() - 1; index > 0; index--)
         {
-            Collections.swap(pile, index, level.getRandom().nextInt(index + 1));
+            Collections.swap(list, index, new java.security.SecureRandom().nextInt(index + 1));
         }
-        return true;
     }
 
     // Locating ---------------------------------------------------------------
