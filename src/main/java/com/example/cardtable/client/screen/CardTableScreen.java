@@ -60,10 +60,15 @@ import java.util.UUID;
  * client agrees on their relative positions; {@link TableView} rotates the
  * whole content by 0°/90°/180°/270° so each player sees "their own side" at
  * the bottom, and drops are mapped back through the inverse transform. The
- * occupant's hand renders as a fanned strip above the player inventory, and
- * the deck slot lives in the top-right corner — both fixed UI that never
- * rotates. Table and pile data come from the synced block entities, the
- * hand only from {@link ClientHandStore}.</p>
+ * seat ring turns with that rotation too, so the viewer's own seat is always
+ * the bottom-most one, and it is the only seat pulled out of the ring: it is
+ * pinned to the bottom-left, just outside the table's left edge, so the
+ * board itself stays clear. The bottom band of the screen, below the
+ * playfield, holds exactly two things the viewer needs in front of them:
+ * that own seat plate on the left and the hand, fanned in the bottom centre.
+ * The deck slot and backpack toggle stay in the top-right corner; none of
+ * this fixed UI rotates. Table and pile data come from the synced block
+ * entities, the hand only from {@link ClientHandStore}.</p>
  */
 public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 {
@@ -101,6 +106,26 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int SEAT_SIZE = 26;
     /** Seat ring inset from the screen edges. */
     private static final int SEAT_INSET = 40;
+    /**
+     * Height of the band the playfield leaves free along the bottom of the
+     * screen, holding the own seat plate and the hand strip. Both are UI the
+     * player reads constantly, so they belong in front of them — but off the
+     * board, which is why the playfield stops above this band instead of
+     * running to the screen edge.
+     */
+    private static final int BOTTOM_BAND_HEIGHT = 58;
+    /** Gap kept between the hand strip and the bottom screen edge. */
+    private static final int HAND_BOTTOM_MARGIN = 8;
+    /** Gap between the own seat plate's bottom edge and the screen edge (room for the name line). */
+    private static final int OWN_SEAT_BOTTOM_MARGIN = 14;
+    /** Gap between the own seat plate and the table's left edge. */
+    private static final int OWN_SEAT_EDGE_GAP = 6;
+    /** Most a seat name may occupy on screen before it is trimmed with an ellipsis. */
+    private static final int SEAT_NAME_MAX_WIDTH = 96;
+    /** Horizontal padding between label text and the edge of its backing plate. */
+    private static final int LABEL_PAD_X = 2;
+    /** Vertical padding between label text and its backing plate. */
+    private static final int LABEL_PAD_Y = 1;
     /** Side gaps around the board so the surrounding world stays visible on the left/right, like a container menu. */
     private static final int SIDE_MARGIN = 18;
     /** Playfield inset from the screen edges, clamped down for small windows. */
@@ -122,17 +147,31 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int COLOR_WOOD_DARK = 0xFF5A3D26;
     private static final int COLOR_PLAYFIELD = 0x66EDE7D9;
     private static final int COLOR_PLAYFIELD_EDGE = 0xFF6B4A2F;
-    private static final int COLOR_TEXT_DARK = 0xFF3A2A1A;
     private static final int COLOR_SEAT = 0xFF6B4A2F;
     private static final int COLOR_SEAT_EMPTY = 0x904A3624;
     private static final int COLOR_SEAT_SELF = 0xFFD4B483;
     private static final int COLOR_HOVER = 0xFFF5F0E6;
     private static final int COLOR_TEXT_DIM = 0xFFC9BFA8;
-    private static final int COLOR_ERROR = 0xFF8B2E2E;
+    /**
+     * Status and error text. Bright on purpose: it is drawn on
+     * {@link #COLOR_LABEL_BG}, and the old dark red was only legible against the
+     * light wood it used to sit on directly — on a dark plate it collapsed into
+     * the background.
+     */
+    private static final int COLOR_ERROR = 0xFFFF8A73;
     private static final int COLOR_CARD_BORDER = 0xFF2E2620;
     private static final int COLOR_CARD_MISSING = 0xFF555555;
     private static final int COLOR_PANEL = 0x90241C14;
     private static final int COLOR_PANEL_EDGE = 0xFF6B4A2F;
+    /**
+     * Backing plate for every piece of screen text. Text on this screen sits
+     * over the wood texture, the translucent playfield, card backs, seat plates
+     * and bare world, so it is never drawn loose: a dark plate under each label
+     * makes the text readable regardless of what it lands on. Warm-toned to sit
+     * with the board, and translucent enough that content underneath still
+     * reads through it.
+     */
+    private static final int COLOR_LABEL_BG = 0xC0241C14;
 
     /** Height of the soft fade band blending board content into the screen edge. */
     private static final int EDGE_FADE_HEIGHT = 36;
@@ -215,9 +254,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         // windows shorter than that the fixed bottom anchor pushed the cap past
         // the top edge and sliced the rounded border off, so the clamp floats the
         // whole panel (slots included, same field) over the board instead.
+        // While the hand strip is on screen the panel is lifted by the strip's
+        // height: the hand owns the bottom band, and the two must not overlap.
+        int handRise = ownHandCards().isEmpty() ? 0 : HAND_CARD_HEIGHT + HAND_BOTTOM_MARGIN;
         this.inventoryPanelLeft = this.width / 2 - INVENTORY_BAND_WIDTH / 2;
         this.inventoryPanelTop = Math.max(INVENTORY_CAP_HEIGHT + PANEL_TOP_MARGIN,
-                this.height - INVENTORY_BAND_HEIGHT - 6);
+                this.height - INVENTORY_BAND_HEIGHT - 6 - handRise);
         this.inventoryLeft = this.inventoryPanelLeft + INVENTORY_MAIN_SLOT_OFFSET;
         this.inventoryMainTop = this.inventoryPanelTop + (84 - INVENTORY_BAND_V);
         this.inventoryHotbarTop = this.inventoryPanelTop + (142 - INVENTORY_BAND_V);
@@ -270,7 +312,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     }
 
     // One seat per table block, ringed in the group's deterministic position
-    // order; {@code occupantId == null} marks an empty seat.
+    // order; {@code occupantId == null} marks an empty seat. The ring is
+    // turned by the own seat's index so the local player always lands on the
+    // ring's bottom slot — the content rotation already shows them their own
+    // side of the table, and the seats have to agree with it. The own plate
+    // then leaves the ring for a fixed corner anchor (see ownSeatX/ownSeatY).
     private List<SeatSlot> computeSeats(TableGroupService.GroupView group)
     {
         int centerX = this.width / 2;
@@ -284,17 +330,52 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         // Same deterministic order as master election, so the ring is stable.
         positions.sort(TableGraph::comparePositions);
         int seatCount = positions.size();
+        int ownIndex = ownSeatIndex(positions);
+        int bottomSlot = TableView.seatRingBottomSlot(seatCount);
         List<SeatSlot> slots = new ArrayList<>(seatCount);
         for (int index = 0; index < seatCount; index++)
         {
-            // First seat at the top, then evenly around the table edge.
-            double angle = -Math.PI / 2.0D + (Math.PI * 2.0D * index) / seatCount;
+            // First seat at the top, then evenly around the table edge; the
+            // ring is shifted by the own seat's index so the own seat takes
+            // the bottom slot (spectators keep the unshifted ring).
+            int slot = TableView.seatRingSlot(index, ownIndex, seatCount, bottomSlot);
+            double angle = -Math.PI / 2.0D + (Math.PI * 2.0D * slot) / seatCount;
             int seatX = centerX + (int) Math.round(Math.cos(angle) * radiusX);
             int seatY = centerY + (int) Math.round(Math.sin(angle) * radiusY);
+            if (index == ownIndex)
+            {
+                seatX = ownSeatX();
+                seatY = ownSeatY();
+            }
             UUID occupantId = this.occupantAt(positions.get(index));
             slots.add(new SeatSlot(index, seatX, seatY, occupantId));
         }
         return slots;
+    }
+
+    /** Index of the local player's own block in the sorted group order, or -1 while unseated. */
+    private int ownSeatIndex(List<BlockPos> positions)
+    {
+        BlockPos ownSeat = ownSeatPosition();
+        return ownSeat == null ? -1 : positions.indexOf(ownSeat);
+    }
+
+    /**
+     * Own seat plate anchor: bottom-left of the reserved band, just outside the
+     * table's left edge and biased toward the centre rather than jammed into
+     * the window corner. The plate deliberately sits off the playfield — the
+     * one seat the player always has on screen must not cover the board —
+     * which also leaves the bottom centre to the hand strip.
+     */
+    private int ownSeatX()
+    {
+        return Math.max(SEAT_SIZE / 2 + 2, playfieldLeft() - SEAT_SIZE / 2 - OWN_SEAT_EDGE_GAP);
+    }
+
+    /** Own seat plate anchor: bottom-aligned in the reserved band, clearing the name line below it. */
+    private int ownSeatY()
+    {
+        return this.height - OWN_SEAT_BOTTOM_MARGIN - SEAT_SIZE / 2;
     }
 
     @Nullable
@@ -313,12 +394,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     // keeps every client's layout identical.
     private List<Cell> computeCells(TableGroupService.GroupView group)
     {
-        int insetX = Math.min(PLAYFIELD_INSET_X, this.width / 6);
-        int insetY = Math.min(PLAYFIELD_INSET_Y, this.height / 5);
-        int playLeft = SIDE_MARGIN + insetX;
-        int playTop = insetY;
-        int playWidth = this.width - insetX * 2 - SIDE_MARGIN * 2;
-        int playHeight = this.height - insetY * 2;
+        int playLeft = playfieldLeft();
+        int playTop = playfieldTop();
+        int playWidth = playfieldWidth();
+        int playHeight = playfieldHeight();
 
         List<BlockPos> positions = new ArrayList<>(group.positions());
         positions.sort(TableGraph::comparePositions);
@@ -359,10 +438,23 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         return this.width - insetX * 2 - SIDE_MARGIN * 2;
     }
 
-    private int playfieldHeight()
+    /**
+     * Bottom edge of the playfield: the symmetric vertical inset, stretched by
+     * the reserved bottom band ({@link #BOTTOM_BAND_HEIGHT}) when that band is
+     * the larger of the two. On tall windows the plain inset already leaves
+     * more room than the band needs; on short ones the band wins, and the
+     * board gives up the space rather than let the hand strip sit on it.
+     */
+    private int playfieldBottom()
     {
         int insetY = Math.min(PLAYFIELD_INSET_Y, this.height / 5);
-        return this.height - insetY * 2;
+        int band = Math.min(BOTTOM_BAND_HEIGHT, this.height / 4);
+        return this.height - Math.max(insetY, band);
+    }
+
+    private int playfieldHeight()
+    {
+        return Math.max(1, playfieldBottom() - playfieldTop());
     }
 
     /**
@@ -411,13 +503,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 0.0F, 0.0F, 16, 16, 16, 16);
         graphics.renderOutline(boardLeft, boardTop, boardWidth, boardHeight, COLOR_WOOD_DARK);
 
-        // Reserved play area in the centre with one cell per table block.
-        int insetX = Math.min(PLAYFIELD_INSET_X, this.width / 6);
-        int insetY = Math.min(PLAYFIELD_INSET_Y, this.height / 5);
-        int playLeft = boardLeft + insetX;
-        int playTop = boardTop + insetY;
-        int playWidth = this.width - insetX * 2 - SIDE_MARGIN * 2;
-        int playHeight = this.height - insetY * 2;
+        // Reserved play area in the centre with one cell per table block. It
+        // ends above the bottom band so the hand strip and the own seat plate
+        // never print over the board.
+        int playLeft = playfieldLeft();
+        int playTop = playfieldTop();
+        int playWidth = playfieldWidth();
+        int playHeight = playfieldHeight();
         graphics.fill(playLeft, playTop, playLeft + playWidth, playTop + playHeight, COLOR_PLAYFIELD);
         graphics.renderOutline(playLeft, playTop, playWidth, playHeight, COLOR_PLAYFIELD_EDGE);
 
@@ -456,7 +548,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         graphics.fill(left, top, left + SLOT_SIZE, top + SLOT_SIZE, COLOR_PANEL);
         graphics.renderOutline(left, top, SLOT_SIZE, SLOT_SIZE, COLOR_PANEL_EDGE);
         Component label = Component.translatable("gui.cardtable.deck_slot");
-        graphics.drawString(this.font, label, left + SLOT_SIZE + 4, top + 5, COLOR_TEXT_DIM, true);
+        this.drawLabel(graphics, label, left + SLOT_SIZE + 4, top + 5, COLOR_TEXT_DIM);
 
         // Backpack toggle button directly under the deck slot. Drawn every frame
         // so its hit rect stays in sync with the (resize-aware) deck slot position.
@@ -475,7 +567,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         graphics.renderOutline(toggleX, toggleY, toggleW, toggleH,
                 this.showInventory ? COLOR_SEAT_SELF : COLOR_PANEL_EDGE);
         graphics.drawString(this.font, toggleLabel, toggleX + (toggleW - this.font.width(toggleLabel)) / 2,
-                toggleY + (toggleH - this.font.lineHeight) / 2, COLOR_TEXT_DARK, false);
+                toggleY + (toggleH - this.font.lineHeight) / 2, COLOR_HOVER, false);
     }
 
     // Vanilla-style backpack panel: one blit of the inventory atlas's bottom
@@ -688,7 +780,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return;
         }
-        graphics.drawString(this.font, label, rect.x() + 2, rect.y() - 10, COLOR_TEXT_DIM, true);
+        this.drawLabel(graphics, label, rect.x() + 2, rect.y() - 10, COLOR_TEXT_DIM);
     }
 
     // Zone data accessors ----------------------------------------------------
@@ -793,8 +885,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             // otherwise the slot and its hit rect drift a card height apart.
             graphics.renderOutline(x, y, width, height, COLOR_PLAYFIELD_EDGE);
         }
-        graphics.drawCenteredString(this.font, Component.literal(String.valueOf(count)),
-                x + width / 2 + PILE_STACK_OFFSET * layers / 2, y + 4, COLOR_TEXT_DARK);
+        this.drawCenteredLabel(graphics, Component.literal(String.valueOf(count)),
+                x + width / 2 + PILE_STACK_OFFSET * layers / 2, y + 4, COLOR_HOVER);
     }
 
     /**
@@ -809,19 +901,30 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         return new Rect(x, y - spread, width + spread, height + spread);
     }
 
-    // Own hand strip: only this client's cards (delivered by HandSyncPacket),
-    // rendered above the player inventory with a hover highlight.
-    private void renderHand(GuiGraphics graphics, int mouseX, int mouseY)
+    /**
+     * The local player's rendered hand: nothing while unseated, minus the card
+     * currently on the mouse. Single source of truth for the strip, its hover
+     * test and the backpack panel's lift.
+     */
+    private List<CardInstance> ownHandCards()
     {
         BlockPos ownSection = ownSeatPosition();
         if (ownSection == null)
         {
-            this.handStripRect = null;
-            return;
+            return List.of();
         }
-        List<CardInstance> hand = ClientHandStore.hand(ownSection).stream()
+        return ClientHandStore.hand(ownSection).stream()
                 .filter(card -> !this.isDragging(card))
                 .toList();
+    }
+
+    // Own hand strip: only this client's cards (delivered by HandSyncPacket),
+    // fanned along the bottom centre of the screen with a hover highlight. The
+    // strip is the player's main point of contact with the table, so it sits in
+    // the reserved band they are already looking at rather than on the board.
+    private void renderHand(GuiGraphics graphics, int mouseX, int mouseY)
+    {
+        List<CardInstance> hand = ownHandCards();
         if (hand.isEmpty())
         {
             this.handStripRect = null;
@@ -830,11 +933,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         int overlap = HAND_CARD_WIDTH / 3;
         int stripWidth = HAND_CARD_WIDTH + (hand.size() - 1) * (HAND_CARD_WIDTH - overlap);
         int stripLeft = this.width / 2 - stripWidth / 2;
-        // Clamped to the screen's top edge: with the panel floated up on short
-        // windows, the unclamped strip would overflow above y=0 exactly like the
-        // panel's cap did. Overlap with the panel is acceptable — the strip's
-        // translucent backing keeps both readable.
-        int stripTop = Math.max(2, this.inventoryMainTop - HAND_CARD_HEIGHT - 10);
+        // Bottom-anchored inside the reserved band; on windows too short to
+        // hold the band at all, the playfield's lower edge is the hard limit
+        // instead (the strip then wins the overlap it cannot avoid).
+        int stripTop = Math.max(playfieldBottom() + 2,
+                this.height - HAND_CARD_HEIGHT - HAND_BOTTOM_MARGIN);
         this.handStripRect = new Rect(stripLeft - 4, stripTop - 4, stripWidth + 8, HAND_CARD_HEIGHT + 8);
 
         graphics.fill(this.handStripRect.x(), this.handStripRect.y(),
@@ -861,9 +964,9 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         if (hoveredName != null)
         {
-            graphics.drawCenteredString(this.font,
+            this.drawCenteredLabel(graphics,
                     Component.translatable("gui.cardtable.hand_hint", hoveredName),
-                    this.width / 2, stripTop - 12, COLOR_TEXT_DARK);
+                    this.width / 2, stripTop - 12, COLOR_HOVER);
         }
     }
 
@@ -990,7 +1093,9 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     {
         graphics.fill(x, y, x + width, y + height, COLOR_CARD_MISSING);
         graphics.renderOutline(x, y, width, height, COLOR_CARD_BORDER);
-        graphics.drawCenteredString(this.font, "?", x + width / 2, y + height / 2 - 4, COLOR_TEXT_DIM);
+        String glyph = "?";
+        graphics.drawString(this.font, glyph, x + (width - this.font.width(glyph)) / 2,
+                y + height / 2 - 4, COLOR_HOVER, false);
     }
 
     @Nullable
@@ -1011,8 +1116,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         // No fullscreen menu backdrop on purpose: the surrounding world stays
         // visible around the board, just like a container menu does.
         TableGroupService.GroupView group = this.clientGroup();
-        this.seats = group != null ? this.computeSeats(group) : List.of();
+        // Cells first: the seat ring is turned by the own seat's index, and the
+        // view by the own seat's position, so both read the current frame's
+        // cells rather than the previous frame's.
         this.cells = group != null ? this.computeCells(group) : List.of();
+        this.seats = group != null ? this.computeSeats(group) : List.of();
         this.view = this.computeView();
 
         super.render(graphics, mouseX, mouseY, partialTick);
@@ -1070,7 +1178,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             }
             else
             {
-                graphics.drawCenteredString(this.font, Component.translatable("gui.cardtable.seat_empty"),
+                this.drawCenteredLabel(graphics, Component.translatable("gui.cardtable.seat_empty"),
                         seat.x(), seat.y() - 4, COLOR_TEXT_DIM);
             }
         }
@@ -1079,30 +1187,98 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private void renderOccupant(GuiGraphics graphics, SeatSlot seat, int left, int top)
     {
         Player player = this.resolvePlayer(seat.occupantId());
-        if (player != null)
-        {
-            // 3D portrait anchored at the seat plate's bottom edge; entity extends
-            // upward by roughly 2x the scale, so scale 10 fits the 26px plate.
-            InventoryScreen.renderEntityInInventoryFollowsMouse(graphics,
-                    seat.x, top + SEAT_SIZE - 3, 10,
-                    this.lastMouseX - seat.x, this.lastMouseY - seat.y, player);
-        }
-        else
+        if (player == null)
         {
             // Neutral placeholder figure for a seated player not present in the scene.
             graphics.fill(left + 8, top + 5, left + 18, top + 15, COLOR_TEXT_DIM);
             graphics.fill(left + 5, top + 16, left + 21, top + 23, COLOR_TEXT_DIM);
+            return;
         }
 
-        String name = player != null ? player.getName().getString() : null;
-        if (name != null)
+        // 3D portrait anchored at the seat plate's bottom edge; entity extends
+        // upward by roughly 2x the scale, so scale 10 fits the 26px plate.
+        InventoryScreen.renderEntityInInventoryFollowsMouse(graphics,
+                seat.x, top + SEAT_SIZE - 3, 10,
+                this.lastMouseX - seat.x, this.lastMouseY - seat.y, player);
+        this.renderSeatName(graphics, player.getName().getString(), seat.x(), top + SEAT_SIZE + 2);
+    }
+
+    /**
+     * One line of screen text, drawn the only way this screen draws text: on a
+     * dark backing plate, with shadowing turned off.
+     *
+     * <p>Both halves are load-bearing. The plate is what makes a label
+     * background-proof — this screen paints text over the wood texture, the
+     * translucent playfield, card backs, seat plates and bare world, and no
+     * single text colour reads against all of them. Shadowing is off because
+     * vanilla's drop shadow lays a near-black offset copy of every glyph under
+     * the text; on a light surface that copy is plainly visible and the label
+     * reads as doubled and ghosted. The plate supplies the contrast the shadow
+     * was only faking, so turning it off costs nothing.</p>
+     */
+    private void drawLabel(GuiGraphics graphics, Component text, int x, int y, int color)
+    {
+        if (text.getString().isEmpty())
         {
-            if (name.length() > 10)
-            {
-                name = name.substring(0, 10);
-            }
-            graphics.drawCenteredString(this.font, name, seat.x(), top + SEAT_SIZE + 2, COLOR_TEXT_DARK);
+            return;
         }
+        int width = this.font.width(text);
+        graphics.fill(x - LABEL_PAD_X, y - LABEL_PAD_Y,
+                x + width + LABEL_PAD_X, y + this.font.lineHeight + LABEL_PAD_Y, COLOR_LABEL_BG);
+        graphics.drawString(this.font, text, x, y, color, false);
+    }
+
+    /**
+     * Centered counterpart of {@link #drawLabel}. The plate is clamped inside the
+     * window so a label whose centre sits near an edge — a seat name on the
+     * bottom of the ring, a status line on a narrow window — stays whole instead
+     * of running off screen.
+     */
+    private void drawCenteredLabel(GuiGraphics graphics, Component text, int centerX, int y, int color)
+    {
+        if (text.getString().isEmpty())
+        {
+            return;
+        }
+        int width = this.font.width(text);
+        int left = Math.min(Math.max(centerX - width / 2, LABEL_PAD_X),
+                Math.max(LABEL_PAD_X, this.width - width - LABEL_PAD_X));
+        int top = Math.min(Math.max(y, LABEL_PAD_Y),
+                Math.max(LABEL_PAD_Y, this.height - this.font.lineHeight - LABEL_PAD_Y));
+        this.drawLabel(graphics, text, left, top, color);
+    }
+
+    /**
+     * Draws one seat name as a label: a dark plate with a single copy of the
+     * name on top, trimmed by pixel width so it can never be cut between two
+     * glyphs.
+     */
+    private void renderSeatName(GuiGraphics graphics, String name, int centerX, int plateTop)
+    {
+        int budget = Math.min(SEAT_NAME_MAX_WIDTH, Math.max(1, this.width - LABEL_PAD_X * 4));
+        String label = this.trimToWidth(name, budget);
+        if (label.isEmpty())
+        {
+            return;
+        }
+        this.drawCenteredLabel(graphics, Component.literal(label), centerX, plateTop - 1, COLOR_HOVER);
+    }
+
+    /**
+     * Trims a label to a pixel budget, appending {@code "..."} when anything had
+     * to be cut. Width-based on purpose: cutting by character count can slice a
+     * name in the middle of no glyph in particular and, worse, leaves a stub
+     * with no hint that the name continues.
+     */
+    private String trimToWidth(String name, int maxWidth)
+    {
+        if (this.font.width(name) <= maxWidth)
+        {
+            return name;
+        }
+        String ellipsis = "...";
+        int budget = Math.max(0, maxWidth - this.font.width(ellipsis));
+        return this.font.plainSubstrByWidth(name, budget) + ellipsis;
     }
 
     @Nullable
@@ -1140,13 +1316,25 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         if (!message.getString().isEmpty())
         {
-            // The fixed bottom anchor would print the status over the open
-            // backpack's slot grid, so while the panel is shown the message is
-            // lifted just above its top border instead.
-            int statusY = this.showInventory
-                    ? Math.max(2, this.inventoryPanelTop - INVENTORY_CAP_HEIGHT - 12)
-                    : this.height - 34;
-            graphics.drawCenteredString(this.font, message, this.width / 2, statusY, COLOR_ERROR);
+            // The message is centred, so it would land on whatever owns the
+            // bottom of the screen: on the open backpack's slot grid, or on the
+            // hand strip. It is lifted above whichever is there — the strip
+            // (drawn earlier this frame) takes precedence, since it is the one
+            // the player is actually looking at.
+            int statusY;
+            if (this.showInventory)
+            {
+                statusY = Math.max(2, this.inventoryPanelTop - INVENTORY_CAP_HEIGHT - 12);
+            }
+            else if (this.handStripRect != null)
+            {
+                statusY = Math.max(2, this.handStripRect.y() - 14);
+            }
+            else
+            {
+                statusY = this.height - 34;
+            }
+            this.drawCenteredLabel(graphics, message, this.width / 2, statusY, COLOR_ERROR);
         }
     }
 
@@ -1180,7 +1368,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         int y = this.height - 12;
         for (Component line : lines)
         {
-            graphics.drawString(this.font, line, this.width - 4 - this.font.width(line), y, COLOR_TEXT_DIM, true);
+            this.drawLabel(graphics, line, this.width - 4 - this.font.width(line), y, COLOR_TEXT_DIM);
             y -= 12;
         }
     }
@@ -1252,10 +1440,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
         if (this.handStripRect != null && this.handStripRect.contains(mouseX, mouseY))
         {
-            BlockPos ownSection = ownSeatPosition();
-            List<CardInstance> hand = ownSection != null
-                    ? ClientHandStore.hand(ownSection).stream().filter(card -> !this.isDragging(card)).toList()
-                    : List.of();
+            List<CardInstance> hand = ownHandCards();
             int overlap = HAND_CARD_WIDTH / 3;
             for (int index = hand.size() - 1; index >= 0; index--)
             {

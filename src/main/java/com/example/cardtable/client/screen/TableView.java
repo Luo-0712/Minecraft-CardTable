@@ -66,6 +66,37 @@ public final class TableView
         return best;
     }
 
+    /**
+     * The seat ring's bottom-most slot for a table of {@code seatCount}
+     * seats: the ring's first seat starts straight up, so the slot straight
+     * down is half a turn later, {@code seatCount / 2}. An even count lands
+     * exactly on the bottom centre; an odd one has two slots straddling it
+     * and picks the right-hand of the pair (both are equally low).
+     */
+    public static int seatRingBottomSlot(int seatCount)
+    {
+        return Math.max(0, seatCount / 2);
+    }
+
+    /**
+     * The slot one seat occupies once the ring is turned so the viewer's own
+     * seat ({@code ownIndex}) lands on {@code bottomSlot}. Relative order
+     * around the ring is preserved; {@code ownIndex < 0} (a spectator) leaves
+     * the ring unshifted.
+     *
+     * <p>Same idea as the content rotation, expressed for the ring: the ring
+     * carries no geometry of its own, so the viewer's own seat is identified
+     * by index rather than by position.</p>
+     */
+    public static int seatRingSlot(int index, int ownIndex, int seatCount, int bottomSlot)
+    {
+        if (ownIndex < 0 || seatCount <= 0)
+        {
+            return index;
+        }
+        return Math.floorMod(index + bottomSlot - ownIndex, seatCount);
+    }
+
     /** The rotation quarter: how many times the table content turns 90°. */
     public int quarters()
     {

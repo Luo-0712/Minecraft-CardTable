@@ -3,6 +3,7 @@ package com.example.cardtable.client.screen;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -172,5 +173,63 @@ class TableViewTest
         double[] screen = view.tableToScreen(0, 0);
         double[] back = view.screenToTable(screen[0], screen[1]);
         assertTrue(Double.isFinite(back[0]) && Double.isFinite(back[1]));
+    }
+
+    // Seat ring rotation -------------------------------------------------------
+
+    @Test
+    void theOwnSeatAlwaysTakesTheBottomSlot()
+    {
+        // For every seat count and every possible own seat, the ring slot the
+        // own seat is given must be the bottom slot the ring is built around.
+        for (int seatCount = 1; seatCount <= 8; seatCount++)
+        {
+            int bottom = TableView.seatRingBottomSlot(seatCount);
+            for (int own = 0; own < seatCount; own++)
+            {
+                assertEquals(bottom, TableView.seatRingSlot(own, own, seatCount, bottom),
+                        "seat " + own + " of " + seatCount + " must take the bottom slot");
+            }
+        }
+    }
+
+    @Test
+    void theBottomSlotIsTheLowestAndTheShiftStaysAPermutation()
+    {
+        // The bottom slot's ring angle must be the lowest, and the mapping must
+        // stay a permutation of the slots — a shift that collapsed two seats
+        // onto one slot would tear the ring apart. Screen y grows downward, so
+        // "lowest" is the largest sine of the ring angle.
+        for (int seatCount = 1; seatCount <= 8; seatCount++)
+        {
+            int bottom = TableView.seatRingBottomSlot(seatCount);
+            double bottomSlotY = Math.sin(-Math.PI / 2.0D + Math.PI * 2.0D * bottom / seatCount);
+            for (int slot = 0; slot < seatCount; slot++)
+            {
+                double y = Math.sin(-Math.PI / 2.0D + Math.PI * 2.0D * slot / seatCount);
+                assertTrue(bottomSlotY >= y - 1e-9,
+                        "slot " + bottom + " must be the bottom-most of " + seatCount);
+            }
+
+            boolean[] taken = new boolean[seatCount];
+            for (int index = 0; index < seatCount; index++)
+            {
+                int slot = TableView.seatRingSlot(index, 0, seatCount, bottom);
+                assertTrue(slot >= 0 && slot < seatCount, "slot must stay on the ring");
+                assertFalse(taken[slot], "two seats must never share a slot");
+                taken[slot] = true;
+            }
+        }
+    }
+
+    @Test
+    void spectatorsKeepTheUnshiftedRing()
+    {
+        // Unseated players (ownIndex < 0) have no own seat to bring to the
+        // bottom, so the ring must stay exactly as declared.
+        for (int index = 0; index < 4; index++)
+        {
+            assertEquals(index, TableView.seatRingSlot(index, -1, 4, 2));
+        }
     }
 }
