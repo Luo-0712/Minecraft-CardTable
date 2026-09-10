@@ -356,8 +356,22 @@ public final class ContentPackLoader
     private static CardDefinitionJsonCodec.TextureMapper dynamicMapper(
             CardDefinitionJsonCodec.PackMeta meta)
     {
-        return relative -> new ResourceLocation(DYNAMIC_NAMESPACE,
-                meta.id().getNamespace() + "/" + meta.id().getPath() + "/" + relative.toLowerCase(Locale.ROOT));
+        return relative -> dynamicTextureId(meta.id(), relative);
+    }
+
+    /**
+     * The single source of truth for a file pack's texture id, shared by the
+     * mapper that stamps {@code front}/{@code back} ids into card definitions
+     * and by {@code CardTextureResolver} when it registers the PNG bytes as
+     * dynamic textures. Deriving both from one helper is load-bearing: the two
+     * sides must agree exactly, or every resolved id misses and the pack's
+     * cards all render as the missing-texture placeholder. The pack prefix
+     * keeps identically named textures of different packs apart.
+     */
+    public static ResourceLocation dynamicTextureId(ResourceLocation packId, String relativePath)
+    {
+        return new ResourceLocation(DYNAMIC_NAMESPACE,
+                packId.getNamespace() + "/" + packId.getPath() + "/" + relativePath.toLowerCase(Locale.ROOT));
     }
 
     // Pack sources -------------------------------------------------------------

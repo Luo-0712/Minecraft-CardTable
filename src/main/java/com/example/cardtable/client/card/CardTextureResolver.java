@@ -58,7 +58,9 @@ public final class CardTextureResolver
         for (ContentPack pack : ContentPackLoader.loadedPacks())
         {
             pack.dynamicTextures().forEach((path, bytes) -> {
-                ResourceLocation id = new ResourceLocation(DYNAMIC_NAMESPACE, path);
+                // Same id derivation the loader stamps into card definitions,
+                // so resolve() finds what this registration put into the map.
+                ResourceLocation id = ContentPackLoader.dynamicTextureId(pack.id(), path);
                 try
                 {
                     NativeImage image = NativeImage.read(new ByteArrayInputStream(bytes));
