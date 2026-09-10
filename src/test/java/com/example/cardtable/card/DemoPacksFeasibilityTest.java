@@ -49,8 +49,9 @@ class DemoPacksFeasibilityTest
 
     // Pack loading ------------------------------------------------------------
 
+    /** Pack JSON straight off the classpath; shared with the other core tests. */
     @Nullable
-    private static JsonElement readJson(String pack, String file)
+    static JsonElement readJson(String pack, String file)
     {
         try (InputStream stream = DemoPacksFeasibilityTest.class.getResourceAsStream(
                 "/assets/cardtable/cardpacks/" + pack + "/" + file))
@@ -103,12 +104,12 @@ class DemoPacksFeasibilityTest
         return layout.normalized();
     }
 
-    private static TableGroupState loadedTable(String pack, TableLayoutDefinition layout, List<TableSectionState> seats)
+    private static TableGroupState loadedTable(String pack, TableLayoutDefinition layout)
     {
         TableGroupState groupState = TableGroupState.create();
         ResourceLocation deckId = CardRegistry.allSets().iterator().next().id();
-        assertTrue(DeckService.loadDeck(groupState, deckId, layout, seats),
-                "the pack layout must provide a shared stock pile for the whole deck");
+        assertTrue(DeckService.loadDeck(groupState, deckId, layout),
+                "the pack layout must provide a stock pile for the whole deck");
         return groupState;
     }
 
@@ -128,11 +129,11 @@ class DemoPacksFeasibilityTest
         TableLayoutDefinition layout = normalizedLayout(POKER);
         ResourceLocation deckId = CardRegistry.allSets().iterator().next().id();
 
-        // Convention one: both declared stacks are piles; the implicit free
-        // surface is the third and last zone. No builtin pile ids anywhere.
-        assertEquals(3, layout.zones().size());
+        // Convention one: both declared stacks are piles. No builtin pile ids
+        // anywhere, and the blank surface is core state, not a layout zone.
+        assertEquals(2, layout.zones().size());
         assertEquals(2, layout.pileZones().size());
-        assertNotNull(layout.zone(TableLayoutDefinition.ZONE_FREE));
+        assertNull(layout.zone(TableLayoutDefinition.ZONE_FREE));
         assertNull(layout.zone(new ResourceLocation("cardtable", "draw_pile")));
         assertNull(layout.zone(new ResourceLocation("cardtable", "discard_pile")));
 
@@ -140,7 +141,7 @@ class DemoPacksFeasibilityTest
         TableSectionState seat = new TableSectionState();
         UUID actorId = UUID.randomUUID();
         seat.setOccupant(actorId);
-        TableGroupState groupState = loadedTable(POKER, layout, List.of());
+        TableGroupState groupState = loadedTable(POKER, layout);
         ResourceLocation deckZone = layout.initialZoneFor(deckId).id();
         assertEquals(10, groupState.getSharedZones().get(deckZone).stackCards().size());
         assertEquals(0, groupState.getSharedZones().get(
@@ -161,18 +162,27 @@ class DemoPacksFeasibilityTest
         assertEquals(9, groupState.getSharedZones().get(deckZone).stackCards().size());
         assertEquals(before, pileInstanceIds(groupState, deckZone));
 
-        // Flip (bound to F): flips the card under the cursor, here the hand.
+        // Flip (bound to F): flips a card lying on the table, not a hand one.
+        // A hand is hidden information its owner already reads, so flipping
+        // there has no public face to change and is refused outright.
         CardInstance handCard = seat.getHand().get(0);
+        assertFalse(perform(layout, groupState, seat, actorId, actionById(layout, "flip"),
+                handCard.instanceId(), List.of(seat)), "a hand card has no public face to flip");
         assertFalse(handCard.isFaceUp());
+
+        assertNotNull(seat.removeHandCard(handCard.instanceId()));
+        groupState.getSurface().addPlaced(handCard, 0.5F, 0.5F);
         assertTrue(perform(layout, groupState, seat, actorId, actionById(layout, "flip"),
                 handCard.instanceId(), List.of(seat)));
         assertTrue(handCard.isFaceUp());
 
-        // Taking the deck out resets the table to the empty state.
+        // Taking the deck out resets the layout state but never the surface:
+        // the blank table outlives the deck, its cards stay where they are.
         groupState.resetLayoutState();
-        seat.resetSeatZones();
         assertTrue(groupState.getSharedZones().isEmpty());
         assertNull(groupState.getActiveLayoutId());
+        assertEquals(1, groupState.getSurface().size(),
+                "the surface is independent of the deck lifecycle");
     }
 
     // Pack B: demo_battle, the alien shape ------------------------------------
@@ -183,37 +193,31 @@ class DemoPacksFeasibilityTest
         TableLayoutDefinition layout = normalizedLayout(BATTLE);
         ResourceLocation deckId = CardRegistry.allSets().iterator().next().id();
 
-        // Five declared zones (two piles, two grids, the overridden surface) —
-        // none of them builtin ids, all of them pack-owned names.
-        assertEquals(5, layout.zones().size());
+        // Three declared zones (two piles, one grid) — none of them builtin
+        // ids, all of them pack-owned names. The blank surface is core state.
+        assertEquals(3, layout.zones().size());
         assertEquals(2, layout.pileZones().size());
         assertEquals(5, layout.zone(new ResourceLocation("cardtable", "demo_battle/market")).capacity());
-        ZoneDefinition board = layout.zone(new ResourceLocation("cardtable", "demo_battle/board"));
-        assertEquals(4, board.capacity());
-        assertEquals(ZoneDefinition.Scope.PER_SEAT, board.scope());
+        assertNull(layout.zone(TableLayoutDefinition.ZONE_FREE));
 
-        // The overridden table surface keeps its locked scope/kind but takes
-        // the pack's rect: the "hand side" band at the seat's bottom.
-        ZoneDefinition free = layout.zone(TableLayoutDefinition.ZONE_FREE);
-        assertEquals(0.6F, free.y());
-        assertEquals(0.4F, free.h());
-        assertEquals(ZoneDefinition.Scope.PER_SEAT, free.scope());
-        assertEquals(ZoneDefinition.Kind.FREE, free.kind());
-
-        // Two seats: PER_SEAT containers are instantiated once per seat.
+        // Seats no longer carry zone containers; every declared zone has one
+        // group-level instance.
         TableSectionState seatA = new TableSectionState();
         TableSectionState seatB = new TableSectionState();
         UUID actorId = UUID.randomUUID();
         seatA.setOccupant(actorId);
-        TableGroupState groupState = loadedTable(BATTLE, layout, List.of(seatA, seatB));
+        TableGroupState groupState = loadedTable(BATTLE, layout);
 
         // The whole deck lands in the shared stock pile.
         ResourceLocation deckZone = layout.initialZoneFor(deckId).id();
         assertEquals(10, groupState.getSharedZones().get(deckZone).stackCards().size());
-        // PER_SEAT grid containers exist per seat and start empty.
-        assertNotNull(seatA.getSeatZones().get(board.id()));
-        assertNotNull(seatB.getSeatZones().get(board.id()));
-        assertTrue(seatA.getSeatZones().get(board.id()).isEmpty());
+        // The market grid container exists once, group-level, and starts empty;
+        // the blank surface starts empty too.
+        assertNotNull(groupState.getSharedZones().get(
+                new ResourceLocation("cardtable", "demo_battle/market")));
+        assertTrue(groupState.getSharedZones().get(
+                new ResourceLocation("cardtable", "demo_battle/market")).isEmpty());
+        assertTrue(groupState.getSurface().isEmpty());
 
         // Draw 2 (bound to G, not D): the pack picks its own keys.
         TableActionDefinition deal = actionById(layout, "deal");
@@ -250,7 +254,7 @@ class DemoPacksFeasibilityTest
                     CardDefinitionJsonCodec.parsePackMeta(readJson(pack, "pack.json").getAsJsonObject()),
                     NOPLogger.NOP_LOGGER).canonicalLine();
             assertEquals(first, second, pack + " must hash identically on both peers");
-            assertTrue(first.startsWith("layout3|"), pack + " uses the layout3 canonical format");
+            assertTrue(first.startsWith("layout4|"), pack + " uses the layout4 canonical format");
         }
     }
 

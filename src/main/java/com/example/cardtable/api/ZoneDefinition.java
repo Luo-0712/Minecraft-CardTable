@@ -11,10 +11,11 @@ import javax.annotation.Nullable;
  * mods inside a {@link TableLayoutDefinition}; the core places and validates
  * them but never interprets what a zone means for any game's rules.
  *
- * <p>The rect and card coordinates are normalized (0..1) and interpreted in
- * the coordinate space selected by {@link Scope}: SHARED zones cover the whole
- * merged playfield, PER_SEAT zones cover one seat's cell. The origin is the
- * top-left of that space, x grows right and y grows down.</p>
+ * <p>Every zone is a group-level instance: the rect and card coordinates are
+ * normalized (0..1) over the whole merged playfield. The origin is the
+ * top-left of the playfield, x grows right and y grows down. There is no
+ * per-seat coordinate space any more — each client rotates the shared table
+ * content for its own viewpoint instead.</p>
  */
 public final class ZoneDefinition
 {
@@ -29,15 +30,6 @@ public final class ZoneDefinition
         FREE
     }
 
-    /** Which coordinate space the rect and card positions live in. */
-    public enum Scope
-    {
-        /** One instance per table group; the rect covers the whole playfield. */
-        SHARED,
-        /** One instance per seat; the rect covers that seat's own cell. */
-        PER_SEAT
-    }
-
     /** Sync visibility hook; the first iteration only ever accepts {@link #PUBLIC}. */
     public enum Visibility
     {
@@ -49,7 +41,6 @@ public final class ZoneDefinition
 
     private final ResourceLocation id;
     private final Kind kind;
-    private final Scope scope;
     private final float x;
     private final float y;
     private final float w;
@@ -63,7 +54,6 @@ public final class ZoneDefinition
     {
         this.id = builder.id;
         this.kind = builder.kind;
-        this.scope = builder.scope;
         this.x = builder.x;
         this.y = builder.y;
         this.w = builder.w;
@@ -89,30 +79,25 @@ public final class ZoneDefinition
         return this.kind;
     }
 
-    public Scope scope()
-    {
-        return this.scope;
-    }
-
-    /** Left edge of the rect in scope-space normalized coordinates. */
+    /** Left edge of the rect in playfield-normalized coordinates. */
     public float x()
     {
         return this.x;
     }
 
-    /** Top edge of the rect in scope-space normalized coordinates. */
+    /** Top edge of the rect in playfield-normalized coordinates. */
     public float y()
     {
         return this.y;
     }
 
-    /** Width of the rect in scope-space normalized coordinates. */
+    /** Width of the rect in playfield-normalized coordinates. */
     public float w()
     {
         return this.w;
     }
 
-    /** Height of the rect in scope-space normalized coordinates. */
+    /** Height of the rect in playfield-normalized coordinates. */
     public float h()
     {
         return this.h;
@@ -156,14 +141,13 @@ public final class ZoneDefinition
     @Override
     public String toString()
     {
-        return "ZoneDefinition[" + this.id + " " + this.kind + "/" + this.scope + "]";
+        return "ZoneDefinition[" + this.id + " " + this.kind + "]";
     }
 
     public static final class Builder
     {
         private final ResourceLocation id;
         private Kind kind;
-        private Scope scope;
         private float x;
         private float y;
         private float w;
@@ -181,12 +165,6 @@ public final class ZoneDefinition
         public Builder kind(Kind kind)
         {
             this.kind = java.util.Objects.requireNonNull(kind, "kind");
-            return this;
-        }
-
-        public Builder scope(Scope scope)
-        {
-            this.scope = java.util.Objects.requireNonNull(scope, "scope");
             return this;
         }
 
@@ -224,10 +202,6 @@ public final class ZoneDefinition
             if (this.kind == null)
             {
                 throw new IllegalStateException("Zone " + this.id + " is missing a kind");
-            }
-            if (this.scope == null)
-            {
-                throw new IllegalStateException("Zone " + this.id + " is missing a scope");
             }
             if (this.x < 0.0F || this.y < 0.0F || this.w <= 0.0F || this.h <= 0.0F
                     || this.x + this.w > 1.0F || this.y + this.h > 1.0F)

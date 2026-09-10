@@ -11,7 +11,7 @@ class ZoneDefinitionTest
     private static ZoneDefinition.Builder builder()
     {
         return ZoneDefinition.builder(new ResourceLocation("test", "zone"))
-                .kind(ZoneDefinition.Kind.FREE).scope(ZoneDefinition.Scope.SHARED);
+                .kind(ZoneDefinition.Kind.FREE);
     }
 
     @Test
@@ -52,13 +52,10 @@ class ZoneDefinitionTest
     }
 
     @Test
-    void missingKindOrScopeIsRejected()
+    void missingKindIsRejected()
     {
         assertThrows(IllegalStateException.class, () ->
                 ZoneDefinition.builder(new ResourceLocation("test", "z")).rect(0.1F, 0.1F, 0.5F, 0.5F).build());
-        assertThrows(IllegalStateException.class, () ->
-                ZoneDefinition.builder(new ResourceLocation("test", "z"))
-                        .kind(ZoneDefinition.Kind.FREE).rect(0.1F, 0.1F, 0.5F, 0.5F).build());
     }
 
     @Test

@@ -15,7 +15,10 @@ public final class NetworkHandler
     // "2": content pack handshake (request/list) added in the card content phase.
     // "3": open zone ids in the action packet.
     // "4": Perform replaces Draw/Shuffle — the action table is pack-declared.
-    private static final String PROTOCOL_VERSION = "4";
+    // "5": player areas removed — ZoneRef carries no seat position; the
+    //      blank surface is one group-level zone and the hand target is
+    //      resolved to the sender's own seat server-side.
+    private static final String PROTOCOL_VERSION = "5";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(CardTableMod.MODID, "main"),

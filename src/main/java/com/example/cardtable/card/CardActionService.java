@@ -28,13 +28,20 @@ import java.util.UUID;
  * version once, and syncs through the existing block entity path plus the
  * directed hand packets. Clients never mutate zone state themselves.
  *
- * <p>The core knows no game rules: the reserved {@code free}/{@code hand}
- * zones keep their dedicated containers, everything else must be declared by
- * the active layout, and the {@code Perform} action runs one entry of the
- * layout's action table through a generic primitive (draw N from a stack,
- * shuffle a stack, flip/rotate a card). Ownership rules keep the sandbox
- * honest: shared zones are operable by any seated player, while a hand
- * belongs to its occupant only.</p>
+ * <p>The core knows no game rules: the reserved {@code free} surface and the
+ * {@code hand} keep their dedicated containers, everything else must be
+ * declared by the active layout, and the {@code Perform} action runs one
+ * entry of the layout's action table through a generic primitive (draw N
+ * from a stack, shuffle a stack, flip/rotate a card). Ownership rules keep
+ * the sandbox honest: every declared zone is a group-level instance operable
+ * by any seated player, the blank surface is shared table space, and a hand
+ * belongs to its occupant only (the {@code cardtable:hand} target is always
+ * resolved to the acting player's own seat).</p>
+ *
+ * <p>Face orientation is the table's business, not the hand's: a hand card
+ * has no public face (its owner reads it client-side), so flipping it is
+ * refused, and leaving the hand is what settles the face — face-up by
+ * default, face-down when the client asks for it.</p>
  */
 public final class CardActionService
 {
@@ -89,7 +96,10 @@ public final class CardActionService
         if (action instanceof CardActionPacket.Action.Flip flip)
         {
             Located located = locate(level, group, actor.getUUID(), flip.instanceId());
-            if (located == null)
+            // Flipping inside a hidden hand would poison the persistent
+            // orientation: the owner already sees the face client-side, and a
+            // card flipped in hand would land face-up on the table later.
+            if (located == null || located.inHand())
             {
                 return false;
             }
@@ -137,24 +147,28 @@ public final class CardActionService
         ResourceLocation zoneId = target.zoneId();
         if (TableLayoutDefinition.ZONE_FREE.equals(zoneId) || TableLayoutDefinition.ZONE_HAND.equals(zoneId))
         {
-            TableSectionState section = sectionState(level, group, target.sectionPos());
-            if (section == null)
+            // A hand is addressed implicitly: the card always lands in the
+            // acting player's own seat, never anyone else's.
+            TableSectionState ownSeat = null;
+            if (TableLayoutDefinition.ZONE_HAND.equals(zoneId))
             {
-                return false;
-            }
-            if (TableLayoutDefinition.ZONE_HAND.equals(zoneId)
-                    && !actor.getUUID().equals(section.getOccupantId()))
-            {
-                return false; // Cards may only enter one's own hand.
+                ownSeat = ownSeat(level, group, actor);
+                if (ownSeat == null)
+                {
+                    return false;
+                }
             }
             located.removeFromZone().run();
             if (TableLayoutDefinition.ZONE_FREE.equals(zoneId))
             {
-                section.getSurface().add(located.card(), x, y);
+                // The blank surface is one group-level instance; any seated
+                // player may place anywhere on it.
+                applyPlayOrientation(located, zoneId, move.faceDown());
+                groupState.getSurface().addPlaced(located.card(), x, y);
             }
             else
             {
-                section.addHandCard(located.card());
+                ownSeat.addHandCard(located.card());
             }
             return true;
         }
@@ -171,27 +185,9 @@ public final class CardActionService
         {
             return false; // not in the active layout dictionary
         }
-        // Scope match: SHARED must not carry a seat section, PER_SEAT must
-        // carry one that belongs to this table group.
-        if (definition.scope() == ZoneDefinition.Scope.SHARED)
-        {
-            if (target.sectionPos() != null)
-            {
-                return false;
-            }
-        }
-        else if (target.sectionPos() == null || sectionState(level, group, target.sectionPos()) == null)
-        {
-            return false;
-        }
-        // Capacity is a layout rule checked against the target container.
-        ZoneState zone = definition.scope() == ZoneDefinition.Scope.SHARED
-                ? groupState.getSharedZones().get(zoneId)
-                : (sectionState(level, group, target.sectionPos()) == null
-                   || sectionState(level, group, target.sectionPos()).getSeatZones() == null
-                   || sectionState(level, group, target.sectionPos()).getSeatZones().get(zoneId) == null
-                   ? null
-                   : sectionState(level, group, target.sectionPos()).getSeatZones().get(zoneId));
+        // Every layout zone is a group-level instance; the container must
+        // exist for the active layout.
+        ZoneState zone = groupState.getSharedZones().get(zoneId);
         if (zone == null)
         {
             return false; // container missing: layout/state divergence, stay safe
@@ -205,6 +201,7 @@ public final class CardActionService
         if (zone.storage() == ZoneState.Storage.STACK)
         {
             located.removeFromZone().run();
+            applyPlayOrientation(located, zoneId, move.faceDown());
             zone.addToStackTop(located.card());
             return true;
         }
@@ -221,8 +218,39 @@ public final class CardActionService
             y = snapped[1];
         }
         located.removeFromZone().run();
+        applyPlayOrientation(located, zoneId, move.faceDown());
         zone.addPlaced(located.card(), x, y);
         return true;
+    }
+
+    /**
+     * Face of a card entering a public zone, for the one transition that
+     * defines it: leaving the owner's hand. A hand card is always played
+     * face-up (the owner sees its face anyway, so the reveal is the honest
+     * default) unless the client explicitly asked for a face-down play
+     * (shift-drop); every other move keeps whatever face the card already
+     * has, and re-entering a hand is never a reveal.
+     */
+    private static void applyPlayOrientation(Located located, ResourceLocation targetZoneId, boolean faceDown)
+    {
+        applyPlayOrientation(located.card(), located.inHand(), targetZoneId, faceDown);
+    }
+
+    /**
+     * Pure form of the play rule above (same package so the tests can lock it
+     * without a Minecraft bootstrap).
+     *
+     * @param fromHand    the card is leaving its owner's hidden hand
+     * @param faceDown    the client asked for a face-down play (shift-drop)
+     */
+    static void applyPlayOrientation(CardInstance card, boolean fromHand,
+                                     ResourceLocation targetZoneId, boolean faceDown)
+    {
+        if (!fromHand || TableLayoutDefinition.ZONE_HAND.equals(targetZoneId))
+        {
+            return;
+        }
+        card.setFaceUp(!faceDown);
     }
 
     /**
@@ -305,7 +333,7 @@ public final class CardActionService
             {
                 // DRAW primitive: take up to {@code amount} cards from the
                 // source pile top into the actor's own hand.
-                ZoneState pile = stackContainer(layout, groupState, actorSeat, action.sourceZone());
+                ZoneState pile = stackContainer(layout, groupState, action.sourceZone());
                 if (pile == null || actorSeat == null)
                 {
                     return false;
@@ -331,7 +359,7 @@ public final class CardActionService
             {
                 // SHUFFLE primitive: Fisher-Yates over the source pile; the
                 // resulting order travels through the normal sync path.
-                ZoneState pile = stackContainer(layout, groupState, actorSeat, action.sourceZone());
+                ZoneState pile = stackContainer(layout, groupState, action.sourceZone());
                 if (pile == null)
                 {
                     return false;
@@ -346,7 +374,9 @@ public final class CardActionService
             case FLIP ->
             {
                 Located located = locateIn(groupState, actorId, instanceId, sections);
-                if (located == null)
+                // Same rule as the direct Flip action: a hidden hand has no
+                // public orientation, so flipping there is not a move.
+                if (located == null || located.inHand())
                 {
                     return false;
                 }
@@ -368,12 +398,11 @@ public final class CardActionService
     }
 
     /**
-     * The STACK container of a declared zone for the acting player: SHARED
-     * zones live on the group, PER_SEAT ones in the actor's own seat.
+     * The STACK container of a declared zone. Every zone is a group-level
+     * instance, so the actor's seat plays no part here.
      */
     @Nullable
     private static ZoneState stackContainer(TableLayoutDefinition layout, TableGroupState groupState,
-                                            @Nullable TableSectionState actorSeat,
                                             @Nullable ResourceLocation zoneId)
     {
         if (zoneId == null)
@@ -385,11 +414,7 @@ public final class CardActionService
         {
             return null; // only declared piles can be drawn from or shuffled
         }
-        if (definition.scope() == ZoneDefinition.Scope.SHARED)
-        {
-            return groupState.getSharedZones().get(zoneId);
-        }
-        return actorSeat == null ? null : actorSeat.getSeatZones().get(zoneId);
+        return groupState.getSharedZones().get(zoneId);
     }
 
     // Locating ---------------------------------------------------------------
@@ -408,9 +433,10 @@ public final class CardActionService
     }
 
     /**
-     * Pure locator shared with {@link #applyDeclaredAction}: shared zones
-     * first, then each section's surface, seat zones and finally the actor's
-     * own hand. A card in no searchable zone cannot be acted upon.
+     * Pure locator shared with {@link #applyDeclaredAction}: the blank
+     * surface and the declared zones (all group-level) first, then each
+     * section — where only the actor's own hand is searchable. A card in no
+     * searchable zone cannot be acted upon.
      */
     @Nullable
     private static Located locateIn(TableGroupState groupState, @Nullable UUID actorId,
@@ -419,6 +445,11 @@ public final class CardActionService
         if (instanceId == null)
         {
             return null;
+        }
+        var found = groupState.getSurface().find(instanceId);
+        if (found.isPresent())
+        {
+            return new Located(found.get().card(), () -> groupState.getSurface().remove(instanceId), false);
         }
         for (ZoneState zone : groupState.getSharedZones().values())
         {
@@ -430,19 +461,6 @@ public final class CardActionService
         }
         for (TableSectionState section : sections)
         {
-            var found = section.getSurface().find(instanceId);
-            if (found.isPresent())
-            {
-                return new Located(found.get().card(), () -> section.getSurface().remove(instanceId));
-            }
-            for (ZoneState zone : section.getSeatZones().values())
-            {
-                Located located = locateInZone(zone, instanceId);
-                if (located != null)
-                {
-                    return located;
-                }
-            }
             // A hand is invisible and inert to everyone but its owner.
             if (actorId != null && actorId.equals(section.getOccupantId()))
             {
@@ -450,7 +468,7 @@ public final class CardActionService
                 {
                     if (card.instanceId().equals(instanceId))
                     {
-                        return new Located(card, () -> section.removeHandCard(instanceId));
+                        return new Located(card, () -> section.removeHandCard(instanceId), true);
                     }
                 }
             }
@@ -468,18 +486,23 @@ public final class CardActionService
                 if (card.instanceId().equals(instanceId))
                 {
                     return new Located(card, () ->
-                            zone.stackCards().removeIf(pileCard -> pileCard.instanceId().equals(instanceId)));
+                            zone.stackCards().removeIf(pileCard -> pileCard.instanceId().equals(instanceId)), false);
                 }
             }
             return null;
         }
         var found = zone.find(instanceId);
-        return found.map(entry -> new Located(entry.card(), () -> zone.remove(instanceId))).orElse(null);
+        return found.map(entry -> new Located(entry.card(), () -> zone.remove(instanceId), false)).orElse(null);
     }
 
     // Helpers ----------------------------------------------------------------
 
-    private record Located(CardInstance card, Runnable removeFromZone)
+    /**
+     * @param inHand whether the card was found in the actor's own hidden
+     *               hand: such a card has no public face yet, which is what
+     *               the play-orientation rule and the flip guard hinge on.
+     */
+    private record Located(CardInstance card, Runnable removeFromZone, boolean inHand)
     {
     }
 
@@ -502,18 +525,6 @@ public final class CardActionService
     {
         return level.getBlockEntity(group.masterPos()) instanceof CardTableBlockEntity master
                 ? master.getGroupState() : null;
-    }
-
-    @Nullable
-    private static TableSectionState sectionState(Level level, TableGroupService.GroupView group,
-                                                  @Nullable BlockPos sectionPos)
-    {
-        if (sectionPos == null || !group.positions().contains(sectionPos))
-        {
-            return null;
-        }
-        return level.getBlockEntity(sectionPos) instanceof CardTableBlockEntity section
-                ? section.getSectionState() : null;
     }
 
     @Nullable

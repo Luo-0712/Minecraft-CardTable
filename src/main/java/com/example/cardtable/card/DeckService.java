@@ -96,7 +96,7 @@ public final class DeckService
             return false;
         }
 
-        if (!loadDeck(groupState, deckId.get(), normalizedLayout, collectSeats(level, group)))
+        if (!loadDeck(groupState, deckId.get(), normalizedLayout))
         {
             return false;
         }
@@ -108,23 +108,24 @@ public final class DeckService
 
     /**
      * Pure core of the deck insert, shared with the feasibility test: binds
-     * the set/layout, instantiates a container for every declared zone per
-     * the structural conventions and loads the whole deck face-down into the
-     * layout's stock pile (set order; the pile top is the last entry).
+     * the set/layout, instantiates one group-level container for every
+     * declared zone per the structural conventions and loads the whole deck
+     * face-down into the layout's stock pile (set order; the pile top is the
+     * last entry).
      *
-     * @return {@code false} when the layout names no shared stock pile or the
-     *         state diverges from the layout (nothing is mutated then)
+     * @return {@code false} when the layout names no stock pile or the state
+     *         diverges from the layout (nothing is mutated then)
      */
     static boolean loadDeck(TableGroupState groupState, ResourceLocation deckId,
-                            TableLayoutDefinition normalizedLayout, List<TableSectionState> seats)
+                            TableLayoutDefinition normalizedLayout)
     {
         ZoneDefinition stock = normalizedLayout.initialZoneFor(deckId);
-        if (stock == null || stock.scope() != ZoneDefinition.Scope.SHARED)
+        if (stock == null)
         {
-            return false; // the whole deck needs one shared pile to land in
+            return false; // the whole deck needs one pile to land in
         }
         groupState.setLayoutBinding(deckId, normalizedLayout.id());
-        instantiateZoneContainers(groupState, normalizedLayout, seats);
+        instantiateZoneContainers(groupState, normalizedLayout);
         ZoneState container = groupState.getSharedZones().get(stock.id());
         if (container == null || container.storage() != ZoneState.Storage.STACK)
         {
@@ -138,48 +139,22 @@ public final class DeckService
     }
 
     /**
-     * Instantiates the generic zone containers (shared + per-seat) for the
-     * active layout. The reserved hand/free zones keep their dedicated
-     * containers (the per-seat hand list and the per-block surface) and are
-     * never created here.
+     * Instantiates the generic zone containers for the active layout. Every
+     * zone is a group-level instance; the reserved hand/surface ids keep
+     * their dedicated containers and are never created here.
      */
     private static void instantiateZoneContainers(TableGroupState groupState,
-                                                  TableLayoutDefinition normalizedLayout,
-                                                  List<TableSectionState> seats)
+                                                  TableLayoutDefinition normalizedLayout)
     {
         for (ZoneDefinition zone : normalizedLayout.zones())
         {
             if (TableLayoutDefinition.ZONE_FREE.equals(zone.id())
                     || TableLayoutDefinition.ZONE_HAND.equals(zone.id()))
             {
-                continue; // reserved zones keep their dedicated containers
+                continue; // reserved ids keep their dedicated containers
             }
-            if (zone.scope() == ZoneDefinition.Scope.SHARED)
-            {
-                groupState.getSharedZones().put(zone.id(), ZoneState.stackFor(zone.kind()));
-            }
-            else
-            {
-                for (TableSectionState seat : seats)
-                {
-                    seat.getSeatZones().put(zone.id(), ZoneState.stackFor(zone.kind()));
-                }
-            }
+            groupState.getSharedZones().put(zone.id(), ZoneState.stackFor(zone.kind()));
         }
-    }
-
-    /** Every section state of the table group, in the group's position order. */
-    private static List<TableSectionState> collectSeats(Level level, TableGroupService.GroupView group)
-    {
-        List<TableSectionState> seats = new ArrayList<>();
-        for (BlockPos pos : group.positions())
-        {
-            if (level.getBlockEntity(pos) instanceof CardTableBlockEntity section)
-            {
-                seats.add(section.getSectionState());
-            }
-        }
-        return seats;
     }
 
     /** Surface hint for a rejected deck insert; the server log stays authoritative. */
@@ -223,30 +198,19 @@ public final class DeckService
             if (level.getBlockEntity(pos) instanceof CardTableBlockEntity section)
             {
                 TableSectionState sectionState = section.getSectionState();
-                sectionState.getSurface().cards().stream()
-                        .filter(entry -> reclaimedIds.contains(entry.card().definitionId()))
-                        .map(entry -> entry.card().instanceId())
-                        .forEach(sectionState.getSurface()::remove);
                 sectionState.getHand().removeIf(card -> reclaimedIds.contains(card.definitionId()));
-                // Layout-declared PER_SEAT zones are reclaimed too.
-                sectionState.getSeatZones().values().forEach(zone -> zone.removeIfDefinition(reclaimedIds));
             }
         }
 
-        // Layout-declared SHARED zones are reclaimed too.
+        // The blank surface and the declared zones are group-level; their
+        // cards of this deck are reclaimed too (the surface itself survives).
+        groupState.getSurface().removeIfDefinition(reclaimedIds);
         groupState.getSharedZones().values().forEach(zone -> zone.removeIfDefinition(reclaimedIds));
 
         groupState.setDeckStack(ItemStack.EMPTY);
         // Taking the deck out resets the table to the empty state: no layout
-        // binding, no declared containers, just the bare surface and hands.
+        // binding, no declared containers — just the bare surface and hands.
         groupState.resetLayoutState();
-        for (var pos : group.positions())
-        {
-            if (level.getBlockEntity(pos) instanceof CardTableBlockEntity section)
-            {
-                section.getSectionState().resetSeatZones();
-            }
-        }
         groupState.bumpVersion();
         TableGroupService.syncGroup(level, group);
         // Hands may have lost reclaimed cards; re-push every occupant's hand.

@@ -70,6 +70,7 @@
   "gui.cardtable.deck_layout_missing": "该牌组引用的布局不存在，无法上桌：%s",
   "gui.cardtable.deck_stock_missing": "该牌组的布局未声明初始牌堆，无法装载",
   "gui.cardtable.action_hint": "按键 %s：%s",
+  "gui.cardtable.hand_hint": "%s　按住 Shift 放置：倒扣打出",
   "gui.cardtable.active_set": "牌组：%s",
   "gui.cardtable.active_layout": "布局：%s",
   "action.cardtable.standard.draw": "抽牌",

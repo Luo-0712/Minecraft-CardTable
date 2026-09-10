@@ -20,11 +20,11 @@ class TableLayoutDefinitionTest
     private static final ResourceLocation DISCARD_ID =
             new ResourceLocation("test", "discard");
 
-    private static ZoneDefinition zone(String relativeId, ZoneDefinition.Kind kind, ZoneDefinition.Scope scope,
+    private static ZoneDefinition zone(String relativeId, ZoneDefinition.Kind kind,
                                        float x, float y, float w, float h)
     {
         return ZoneDefinition.builder(new ResourceLocation("test", relativeId))
-                .kind(kind).scope(scope).rect(x, y, w, h)
+                .kind(kind).rect(x, y, w, h)
                 .capacity(kind == ZoneDefinition.Kind.GRID ? 4 : 0)
                 .build();
     }
@@ -44,64 +44,38 @@ class TableLayoutDefinitionTest
     private static TableLayoutDefinition.Builder layoutBuilder()
     {
         TableLayoutDefinition.Builder builder = TableLayoutDefinition.builder(new ResourceLocation("test", "layout"));
-        builder.zone(zone("deck", ZoneDefinition.Kind.STACK, ZoneDefinition.Scope.SHARED, 0.02F, 0.02F, 0.06F, 0.12F));
+        builder.zone(zone("deck", ZoneDefinition.Kind.STACK, 0.02F, 0.02F, 0.06F, 0.12F));
         builder.initial(TableLayoutDefinition.INITIAL_DEFAULT_KEY, DECK_ID);
         return builder;
     }
 
     @Test
-    void normalizedLayoutAlwaysCarriesTheImplicitFreeSurface()
+    void normalizedLayoutCarriesNoSurfaceZone()
     {
         TableLayoutDefinition normalized = TableLayoutDefinition.builder(new ResourceLocation("test", "empty"))
                 .build().normalized();
 
-        // A layout without any declaration is the bare table: just the surface.
-        assertEquals(1, normalized.zones().size());
-        assertEquals(TableLayoutDefinition.ZONE_FREE, normalized.zone(TableLayoutDefinition.ZONE_FREE).id());
-        assertEquals(ZoneDefinition.Kind.FREE, normalized.zone(TableLayoutDefinition.ZONE_FREE).kind());
-        assertEquals(ZoneDefinition.Scope.PER_SEAT, normalized.zone(TableLayoutDefinition.ZONE_FREE).scope());
-        assertEquals(0.5F, normalized.zone(TableLayoutDefinition.ZONE_FREE).y());
-        assertEquals(1.0F, normalized.zone(TableLayoutDefinition.ZONE_FREE).w());
-        assertEquals(0.5F, normalized.zone(TableLayoutDefinition.ZONE_FREE).h());
+        // The blank surface is core-owned state, not a layout zone: an empty
+        // layout normalizes to zero zones and the surface id resolves nowhere.
+        assertTrue(normalized.zones().isEmpty());
+        assertNull(normalized.zone(TableLayoutDefinition.ZONE_FREE));
     }
 
     @Test
-    void declaredZonesAreKeptInTheFreeSurfaceCanBeOverridden()
+    void reservedFreeDeclarationIsSkippedByNormalization()
     {
         TableLayoutDefinition normalized = layoutBuilder()
                 .zone(ZoneDefinition.builder(TableLayoutDefinition.ZONE_FREE)
-                        .kind(ZoneDefinition.Kind.FREE).scope(ZoneDefinition.Scope.PER_SEAT)
+                        .kind(ZoneDefinition.Kind.FREE)
                         .rect(0.0F, 0.6F, 1.0F, 0.4F)
                         .label(Component.literal("手边"))
                         .build())
                 .build().normalized();
 
-        assertEquals(2, normalized.zones().size());
-        ZoneDefinition free = normalized.zone(TableLayoutDefinition.ZONE_FREE);
-        assertEquals(0.6F, free.y());
-        assertEquals(0.4F, free.h());
-        assertEquals("手边", free.label().getString());
-        // scope/kind stay locked to the builtin values.
-        assertEquals(ZoneDefinition.Kind.FREE, free.kind());
-        assertEquals(ZoneDefinition.Scope.PER_SEAT, free.scope());
-    }
-
-    @Test
-    void tamperedFreeScopeOrKindFallsBackToImplicitDefault()
-    {
-        TableLayoutDefinition tamperedScope = layoutBuilder()
-                .zone(ZoneDefinition.builder(TableLayoutDefinition.ZONE_FREE)
-                        .kind(ZoneDefinition.Kind.FREE).scope(ZoneDefinition.Scope.SHARED) // wrong scope
-                        .rect(0.86F, 0.62F, 0.12F, 0.30F).build())
-                .build().normalized();
-        assertEquals(0.5F, tamperedScope.zone(TableLayoutDefinition.ZONE_FREE).y()); // implicit default won
-
-        TableLayoutDefinition tamperedKind = layoutBuilder()
-                .zone(ZoneDefinition.builder(TableLayoutDefinition.ZONE_FREE)
-                        .kind(ZoneDefinition.Kind.STACK).scope(ZoneDefinition.Scope.PER_SEAT) // wrong kind
-                        .rect(0.86F, 0.62F, 0.12F, 0.30F).build())
-                .build().normalized();
-        assertEquals(ZoneDefinition.Kind.FREE, tamperedKind.zone(TableLayoutDefinition.ZONE_FREE).kind());
+        // The reserved surface id is not declarable; the declaration is
+        // dropped and only the deck zone remains.
+        assertEquals(1, normalized.zones().size());
+        assertNull(normalized.zone(TableLayoutDefinition.ZONE_FREE));
     }
 
     @Test
@@ -111,7 +85,7 @@ class TableLayoutDefinitionTest
         // normalization can never see one through the public API.
         assertThrows(IllegalArgumentException.class, () -> layoutBuilder()
                 .zone(ZoneDefinition.builder(TableLayoutDefinition.ZONE_HAND)
-                        .kind(ZoneDefinition.Kind.STACK).scope(ZoneDefinition.Scope.PER_SEAT)
+                        .kind(ZoneDefinition.Kind.STACK)
                         .rect(0.0F, 0.0F, 1.0F, 1.0F).build()));
     }
 
@@ -119,8 +93,8 @@ class TableLayoutDefinitionTest
     void duplicateZoneAndActionIdsAreRejectedAtBuildTime()
     {
         assertThrows(IllegalArgumentException.class, () -> layoutBuilder()
-                .zone(zone("bench", ZoneDefinition.Kind.GRID, ZoneDefinition.Scope.PER_SEAT, 0.1F, 0.1F, 0.5F, 0.5F))
-                .zone(zone("bench", ZoneDefinition.Kind.GRID, ZoneDefinition.Scope.PER_SEAT, 0.2F, 0.2F, 0.5F, 0.5F)));
+                .zone(zone("bench", ZoneDefinition.Kind.GRID, 0.1F, 0.1F, 0.5F, 0.5F))
+                .zone(zone("bench", ZoneDefinition.Kind.GRID, 0.2F, 0.2F, 0.5F, 0.5F)));
         assertThrows(IllegalArgumentException.class, () -> layoutBuilder()
                 .action(action("draw", TableActionDefinition.Type.DRAW, DECK_ID, "key.keyboard.d"))
                 .action(action("draw", TableActionDefinition.Type.DRAW, DECK_ID, "key.keyboard.d")));
@@ -130,8 +104,8 @@ class TableLayoutDefinitionTest
     void pileZonesFollowTheStackConvention()
     {
         TableLayoutDefinition normalized = layoutBuilder()
-                .zone(zone("bench", ZoneDefinition.Kind.GRID, ZoneDefinition.Scope.PER_SEAT, 0.1F, 0.1F, 0.5F, 0.5F))
-                .zone(zone("market", ZoneDefinition.Kind.FREE, ZoneDefinition.Scope.SHARED, 0.2F, 0.4F, 0.5F, 0.3F))
+                .zone(zone("bench", ZoneDefinition.Kind.GRID, 0.1F, 0.1F, 0.5F, 0.5F))
+                .zone(zone("market", ZoneDefinition.Kind.FREE, 0.2F, 0.4F, 0.5F, 0.3F))
                 .build().normalized();
 
         // Only the stack zones count as piles; grid/free zones are plain areas.
@@ -154,7 +128,7 @@ class TableLayoutDefinitionTest
     void initialPointingOutsideTheLayoutIsDroppedByNormalization()
     {
         TableLayoutDefinition.Builder builder = TableLayoutDefinition.builder(new ResourceLocation("test", "layout"));
-        builder.zone(zone("deck", ZoneDefinition.Kind.STACK, ZoneDefinition.Scope.SHARED, 0.02F, 0.02F, 0.06F, 0.12F));
+        builder.zone(zone("deck", ZoneDefinition.Kind.STACK, 0.02F, 0.02F, 0.06F, 0.12F));
         builder.initial("cardtable:standard", DISCARD_ID); // declared nowhere
         builder.initial(TableLayoutDefinition.INITIAL_DEFAULT_KEY, DECK_ID);
 
@@ -164,12 +138,12 @@ class TableLayoutDefinitionTest
     }
 
     @Test
-    void perSeatInitialIsDroppedByNormalization()
+    void initialPointingAtNonStackZoneIsDroppedByNormalization()
     {
         TableLayoutDefinition.Builder builder = TableLayoutDefinition.builder(new ResourceLocation("test", "layout"));
-        builder.zone(zone("deck", ZoneDefinition.Kind.STACK, ZoneDefinition.Scope.PER_SEAT, 0.02F, 0.02F, 0.06F, 0.12F));
+        builder.zone(zone("bench", ZoneDefinition.Kind.GRID, 0.02F, 0.02F, 0.06F, 0.12F));
         builder.initial(TableLayoutDefinition.INITIAL_DEFAULT_KEY,
-                new ResourceLocation("test", "deck"));
+                new ResourceLocation("test", "bench"));
 
         assertTrue(builder.build().normalized().initialZones().isEmpty());
         assertNull(builder.build().normalized().initialZoneFor(new ResourceLocation("test", "set")));
@@ -217,9 +191,7 @@ class TableLayoutDefinitionTest
     void normalizationIsIdempotent()
     {
         TableLayoutDefinition layout = layoutBuilder()
-                .zone(ZoneDefinition.builder(TableLayoutDefinition.ZONE_FREE)
-                        .kind(ZoneDefinition.Kind.FREE).scope(ZoneDefinition.Scope.PER_SEAT)
-                        .rect(0.4F, 0.8F, 0.05F, 0.10F).build())
+                .zone(zone("bench", ZoneDefinition.Kind.GRID, 0.1F, 0.1F, 0.5F, 0.5F))
                 .action(action("draw", TableActionDefinition.Type.DRAW, DECK_ID, "key.keyboard.d"))
                 .build();
         TableLayoutDefinition once = layout.normalized();
@@ -231,7 +203,6 @@ class TableLayoutDefinitionTest
         {
             ZoneDefinition other = twice.zone(zone.id());
             assertEquals(zone.kind(), other.kind());
-            assertEquals(zone.scope(), other.scope());
             assertEquals(zone.x(), other.x());
             assertEquals(zone.y(), other.y());
             assertEquals(zone.w(), other.w());

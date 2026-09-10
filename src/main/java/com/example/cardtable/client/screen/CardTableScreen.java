@@ -9,7 +9,6 @@ import com.example.cardtable.api.TableLayoutDefinition;
 import com.example.cardtable.api.ZoneDefinition;
 import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.card.CardInstance;
-import com.example.cardtable.card.SurfaceZone;
 import com.example.cardtable.card.ZoneState;
 import com.example.cardtable.client.ClientHandStore;
 import com.example.cardtable.client.ModKeyBindings;
@@ -26,6 +25,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.core.BlockPos;
@@ -52,20 +52,28 @@ import java.util.UUID;
  * seated player's portrait and name, and development debug info stays in the
  * bottom-right corner (F3 toggles it while the view is open).
  *
- * <p>The playfield is subdivided into one cell per table block (deterministic
- * order, same comparator as master election). Each cell renders its block's
- * surface cards; zones render per the active layout (the default draw pile
- * sits top-left while the discard pile covers the whole playfield, its stack
- * rendering at the centre so any unmatched drop discards); the
+ * <p>The table itself is one blank, shared surface: a single group-level
+ * free placement area covering the whole playfield, with no per-seat cells
+ * and no built-in piles. Layout-declared zones (piles, grids) render on top
+ * of it; the surface itself renders nothing and is the catch-all drop
+ * target. Cards are stored in group-level normalized coordinates, so every
+ * client agrees on their relative positions; {@link TableView} rotates the
+ * whole content by 0°/90°/180°/270° so each player sees "their own side" at
+ * the bottom, and drops are mapped back through the inverse transform. The
  * occupant's hand renders as a fanned strip above the player inventory, and
- * the deck slot lives in the top-right corner. Surface and pile data come
- * from the synced block entities, the hand only from {@link ClientHandStore}.</p>
+ * the deck slot lives in the top-right corner — both fixed UI that never
+ * rotates. Table and pile data come from the synced block entities, the
+ * hand only from {@link ClientHandStore}.</p>
  */
 public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 {
     /** The same texture used by the table block, so the canvas matches the board style. */
     private static final ResourceLocation TABLE_TEXTURE =
             new ResourceLocation(CardTableMod.MODID, "textures/block/quartz_block_top.png");
+
+    /** Core card back: the last resort for any face-down card whose pack declares none. */
+    private static final ResourceLocation DEFAULT_BACK =
+            new ResourceLocation(CardTableMod.MODID, "card/default_back");
 
     // Vanilla inventory atlas; the backpack rows (3 main rows + hotbar) are the
     // bottom band of the 176x166 container panel, so one blit of the region
@@ -87,6 +95,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
      * only start at V=8, so nothing unrelated leaks into the cap.
      */
     private static final int INVENTORY_CAP_HEIGHT = 7;
+    /** Safety gap kept above the panel's top border when the panel is clamped to the screen edge. */
+    private static final int PANEL_TOP_MARGIN = 2;
 
     private static final int SEAT_SIZE = 26;
     /** Seat ring inset from the screen edges. */
@@ -136,6 +146,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private Component status = Component.empty();
     private List<SeatSlot> seats = List.of();
     private List<Cell> cells = List.of();
+    // Per-frame view transform: rotates the shared table content by this
+    // player's seating direction (0 for spectators). Null until render().
+    @Nullable
+    private TableView view;
     private int lastMouseX;
     private int lastMouseY;
 
@@ -197,8 +211,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
         // Bottom-centre the vanilla backpack band; the slot grid then aligns to
         // the atlas offsets (main row at +84, hotbar at +142, band starts at +83).
+        // The panel stack needs 96px (cap 7 + band 83 + bottom margin 6); on
+        // windows shorter than that the fixed bottom anchor pushed the cap past
+        // the top edge and sliced the rounded border off, so the clamp floats the
+        // whole panel (slots included, same field) over the board instead.
         this.inventoryPanelLeft = this.width / 2 - INVENTORY_BAND_WIDTH / 2;
-        this.inventoryPanelTop = this.height - INVENTORY_BAND_HEIGHT - 6;
+        this.inventoryPanelTop = Math.max(INVENTORY_CAP_HEIGHT + PANEL_TOP_MARGIN,
+                this.height - INVENTORY_BAND_HEIGHT - 6);
         this.inventoryLeft = this.inventoryPanelLeft + INVENTORY_MAIN_SLOT_OFFSET;
         this.inventoryMainTop = this.inventoryPanelTop + (84 - INVENTORY_BAND_V);
         this.inventoryHotbarTop = this.inventoryPanelTop + (142 - INVENTORY_BAND_V);
@@ -346,6 +365,37 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         return this.height - insetY * 2;
     }
 
+    /**
+     * Builds this frame's view transform. The rotation is derived from the
+     * own seat cell's position inside the playfield so the seat lands in the
+     * screen's bottom half ("in front of" the player); spectators and
+     * unseated players watch the table un-rotated.
+     */
+    private TableView computeView()
+    {
+        int playLeft = playfieldLeft();
+        int playTop = playfieldTop();
+        int playWidth = Math.max(1, playfieldWidth());
+        int playHeight = Math.max(1, playfieldHeight());
+        int quarters = 0;
+        BlockPos ownSeat = ownSeatPosition();
+        if (ownSeat != null)
+        {
+            for (Cell cell : this.cells)
+            {
+                if (!cell.position().equals(ownSeat))
+                {
+                    continue;
+                }
+                double ownX = (cell.x() + cell.width() / 2.0D - playLeft) / playWidth;
+                double ownY = (cell.y() + cell.height() / 2.0D - playTop) / playHeight;
+                quarters = TableView.quartersFor(ownX, ownY);
+                break;
+            }
+        }
+        return new TableView(playLeft, playTop, playWidth, playHeight, quarters);
+    }
+
     @Override
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY)
     {
@@ -484,9 +534,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     /**
      * Rebuilds the frame's zone render/hit data from the active layout and
-     * draws every zone by kind. Cell outlines are drawn first (board
-     * structure); zones render in layout declaration order, so the last zone
-     * is visually topmost and hit-tested first.
+     * draws every zone by kind, all through the {@link TableView} rotation.
+     * The blank surface registers first as the whole-playfield catch-all
+     * drop target (it renders nothing itself); layout zones render in
+     * declaration order afterwards, so the last zone is visually topmost and
+     * hit-tested first.
      */
     private void renderZones(GuiGraphics graphics, int mouseX, int mouseY)
     {
@@ -495,7 +547,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         this.renderedCards = cards;
         this.zoneHits = hits;
         this.layoutMissing = false;
-        if (this.minecraft == null || this.minecraft.level == null)
+        if (this.minecraft == null || this.minecraft.level == null || this.view == null)
         {
             return;
         }
@@ -505,55 +557,53 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return;
         }
-        TableLayoutDefinition layout = resolveActiveLayout(groupState);
-
-        for (Cell cell : this.cells)
-        {
-            graphics.renderOutline(cell.x(), cell.y(), cell.width(), cell.height(), COLOR_PLAYFIELD_EDGE);
-        }
-        if (layout == null)
-        {
-            return; // no deck bound or the layout is missing: just the bare cells
-        }
-
+        TableView tableView = this.view;
         int playLeft = playfieldLeft();
         int playTop = playfieldTop();
         int playWidth = playfieldWidth();
         int playHeight = playfieldHeight();
+
+        // The blank surface: one group-level free area covering the whole
+        // playfield. It renders nothing (the table stays bare) but catches
+        // every drop no layout zone claims.
+        Rect surfaceTableRect = new Rect(playLeft, playTop, playWidth, playHeight);
+        hits.add(new ZoneHit(TableLayoutDefinition.ZONE_FREE, null, surfaceTableRect, surfaceTableRect));
+
+        TableLayoutDefinition layout = resolveActiveLayout(groupState);
+        if (layout == null)
+        {
+            return; // no deck bound or the layout is missing: just the bare table
+        }
         for (ZoneDefinition zone : layout.zones())
         {
             if (TableLayoutDefinition.ZONE_HAND.equals(zone.id()))
             {
                 continue; // the hand renders as the fixed strip, never on the playfield
             }
-            if (zone.scope() == ZoneDefinition.Scope.SHARED)
-            {
-                renderZone(graphics, zone, scaledRect(playLeft, playTop, playWidth, playHeight, zone),
-                        null, groupState, cards, hits, mouseX, mouseY);
-            }
-            else
-            {
-                for (Cell cell : this.cells)
-                {
-                    if (!(this.minecraft.level.getBlockEntity(cell.position()) instanceof CardTableBlockEntity section))
-                    {
-                        continue;
-                    }
-                    renderZone(graphics, zone, scaledRect(cell.x(), cell.y(), cell.width(), cell.height(), zone),
-                            section, groupState, cards, hits, mouseX, mouseY);
-                }
-            }
+            // Zone rects are computed in table pixel space (unrotated) and
+            // mapped to the screen through the view transform, so every
+            // client sees the same table from its own side.
+            Rect tableRect = scaledRect(playLeft, playTop, playWidth, playHeight, zone);
+            Rect screenRect = toScreenRect(tableView, tableRect);
+            renderZone(graphics, zone, tableRect, screenRect, groupState, cards, hits, mouseX, mouseY, tableView);
         }
     }
 
-    private void renderZone(GuiGraphics graphics, ZoneDefinition zone, Rect rect,
-                            @Nullable CardTableBlockEntity section, TableGroupState groupState,
-                            List<RenderedCard> cards, List<ZoneHit> hits, int mouseX, int mouseY)
+    /** Table pixel rect → screen-space AABB rect (rounded once, shared by render and hit-test). */
+    private static Rect toScreenRect(TableView tableView, Rect tableRect)
     {
-        BlockPos sectionPos = section != null ? section.getBlockPos() : null;
+        int[] bounds = tableView.transformRect(tableRect.x(), tableRect.y(), tableRect.width(), tableRect.height());
+        return new Rect(bounds[0], bounds[1], bounds[2], bounds[3]);
+    }
+
+    private void renderZone(GuiGraphics graphics, ZoneDefinition zone, Rect tableRect, Rect rect,
+                            TableGroupState groupState,
+                            List<RenderedCard> cards, List<ZoneHit> hits, int mouseX, int mouseY,
+                            TableView tableView)
+    {
         if (zone.kind() == ZoneDefinition.Kind.STACK)
         {
-            List<CardInstance> pile = stackOf(zone, section, groupState);
+            List<CardInstance> pile = stackOf(zone, groupState);
             int count = pile.size();
             if (this.drag != null && containsInstance(pile, this.drag.instanceId()))
             {
@@ -562,56 +612,71 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             // A pile is anchored at the centre of its zone rect: for a corner
             // pile (draw) that is nearly the corner itself, while a zone that
             // covers the whole playfield (the default discard pile) lands in
-            // the middle of the table.
-            Rect pileRect = pileRect(rect.x() + (rect.width() - CARD_WIDTH) / 2,
-                    rect.y() + (rect.height() - CARD_HEIGHT) / 2);
+            // the middle of the table. The anchor is derived in table space
+            // so the rotation carries it to the right screen spot; the pile's
+            // cards keep their pixel size (swap for odd quarters).
+            int[] pileAabb = tableView.transformCard(
+                    tableRect.x() + (tableRect.width() - CARD_WIDTH) / 2,
+                    tableRect.y() + (tableRect.height() - CARD_HEIGHT) / 2,
+                    CARD_WIDTH, CARD_HEIGHT);
             // Drop capture is the whole zone rect, not just the visible stack:
             // this is what lets a full-playfield discard pile catch every
             // otherwise-unmatched drop. Grabbing the top card still uses the
             // small pile rect (see the rendered-card entry below).
-            hits.add(new ZoneHit(zone, sectionPos, rect, rect));
-            this.renderPile(graphics, count, pileRect.x(), pileRect.y());
+            hits.add(new ZoneHit(zone.id(), zone, tableRect, rect));
+            this.renderPile(graphics, pile, count, pileAabb[0], pileAabb[1], pileAabb[2], pileAabb[3],
+                    tableView.displayRotationDeg(0));
             this.drawZoneLabel(graphics, zone, rect);
             if (!pile.isEmpty())
             {
                 // The whole stack is grabbable; hover resolves to its top card.
-                cards.add(new RenderedCard(pile.get(pile.size() - 1), pileRect.x(), pileRect.y(),
-                        pileRect.width(), pileRect.height()));
+                Rect grab = pileRect(pileAabb[0], pileAabb[1], pileAabb[2], pileAabb[3]);
+                cards.add(new RenderedCard(pile.get(pile.size() - 1), grab.x(), grab.y(),
+                        grab.width(), grab.height()));
             }
             return;
         }
-        hits.add(new ZoneHit(zone, sectionPos, rect, rect));
+        hits.add(new ZoneHit(zone.id(), zone, tableRect, rect));
         if (zone.kind() == ZoneDefinition.Kind.GRID)
         {
-            this.renderGridSlots(graphics, zone, rect);
+            this.renderGridSlots(graphics, zone, tableRect, tableView);
         }
-        List<ZoneState.PlacedCard> placed = placedOf(zone, section, groupState);
+        List<ZoneState.PlacedCard> placed = placedOf(zone, groupState);
         for (ZoneState.PlacedCard entry : placed)
         {
             if (this.isDragging(entry.card()))
             {
                 continue; // held by the mouse; the zone already shows it gone
             }
-            int[] position = placedCardPosition(rect, entry);
-            boolean hovered = hitTest(mouseX, mouseY, position[0], position[1], CARD_WIDTH, CARD_HEIGHT);
+            // Position mapping happens in table space (identical for every
+            // client); the view transform then places and turns the card.
+            // Cards are fixed-size sprites, so they go through transformCard
+            // (exact pixel swap) rather than the aspect-stretching rect map.
+            int[] position = placedCardPosition(tableRect, entry);
+            int[] aabb = tableView.transformCard(position[0], position[1], CARD_WIDTH, CARD_HEIGHT);
+            boolean hovered = hitTest(mouseX, mouseY, aabb[0], aabb[1], aabb[2], aabb[3]);
             this.drawCard(graphics, entry.card(), entry.card().isFaceUp(),
-                    position[0], position[1], CARD_WIDTH, CARD_HEIGHT, hovered);
-            cards.add(new RenderedCard(entry.card(), position[0], position[1], CARD_WIDTH, CARD_HEIGHT));
+                    aabb[0], aabb[1], aabb[2], aabb[3], hovered,
+                    tableView.displayRotationDeg(entry.card().rotation()));
+            cards.add(new RenderedCard(entry.card(), aabb[0], aabb[1], aabb[2], aabb[3]));
         }
         this.drawZoneLabel(graphics, zone, rect);
     }
 
     /** GRID zones show their slot cells so empty slots stay discoverable. */
-    private void renderGridSlots(GuiGraphics graphics, ZoneDefinition zone, Rect rect)
+    private void renderGridSlots(GuiGraphics graphics, ZoneDefinition zone, Rect tableRect, TableView tableView)
     {
         int slots = Math.max(1, zone.capacity());
-        float slotWidth = (float) rect.width() / slots;
+        float slotWidth = (float) tableRect.width() / slots;
         for (int index = 0; index < slots; index++)
         {
-            int slotLeft = rect.x() + (int) (index * slotWidth);
-            int slotRight = rect.x() + (int) ((index + 1) * slotWidth);
-            graphics.renderOutline(slotLeft + 1, rect.y() + 1,
-                    Math.max(1, slotRight - slotLeft - 2), Math.max(1, rect.height() - 2), COLOR_PLAYFIELD_EDGE);
+            // Each slot rect is transformed individually so the slot row
+            // follows the table axes under rotation.
+            int slotTableX = tableRect.x() + (int) (index * slotWidth);
+            int slotTableRight = tableRect.x() + (int) ((index + 1) * slotWidth);
+            int[] bounds = tableView.transformRect(slotTableX + 1, tableRect.y() + 1,
+                    Math.max(1, slotTableRight - slotTableX - 2), Math.max(1, tableRect.height() - 2));
+            graphics.renderOutline(bounds[0], bounds[1], bounds[2], bounds[3], COLOR_PLAYFIELD_EDGE);
         }
     }
 
@@ -628,42 +693,18 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     // Zone data accessors ----------------------------------------------------
 
-    /** STACK cards of a zone: every pile is a layout-declared generic zone. */
-    private static List<CardInstance> stackOf(ZoneDefinition zone, @Nullable CardTableBlockEntity section,
-                                              TableGroupState groupState)
+    /** STACK cards of a zone: every pile is a layout-declared group-level zone. */
+    private static List<CardInstance> stackOf(ZoneDefinition zone, TableGroupState groupState)
     {
-        ZoneState state = genericZoneState(zone.id(), section, groupState);
+        ZoneState state = groupState.getSharedZones().get(zone.id());
         return state == null ? List.of() : state.stackCards();
     }
 
-    /** FREE/GRID placements of a zone: the reserved free zone reads the surface. */
-    private static List<ZoneState.PlacedCard> placedOf(ZoneDefinition zone, @Nullable CardTableBlockEntity section,
-                                                       TableGroupState groupState)
+    /** FREE/GRID placements of a zone: every declared zone is group-level. */
+    private static List<ZoneState.PlacedCard> placedOf(ZoneDefinition zone, TableGroupState groupState)
     {
-        ResourceLocation id = zone.id();
-        if (TableLayoutDefinition.ZONE_FREE.equals(id))
-        {
-            List<ZoneState.PlacedCard> out = new ArrayList<>();
-            if (section != null)
-            {
-                for (SurfaceZone.SurfaceCard card : section.getSectionState().getSurface().cards())
-                {
-                    out.add(new ZoneState.PlacedCard(card.card(), card.x(), card.y()));
-                }
-            }
-            return out;
-        }
-        ZoneState state = genericZoneState(id, section, groupState);
+        ZoneState state = groupState.getSharedZones().get(zone.id());
         return state == null ? List.of() : state.placedCards();
-    }
-
-    @Nullable
-    private static ZoneState genericZoneState(ResourceLocation id, @Nullable CardTableBlockEntity section,
-                                              TableGroupState groupState)
-    {
-        return section == null
-                ? groupState.getSharedZones().get(id)
-                : section.getSectionState().getSeatZones().get(id);
     }
 
     /** Normalized zone rect → pixel rect inside a base (playfield or cell) rect. */
@@ -705,23 +746,55 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         return this.drag != null && this.drag.instanceId().equals(card.instanceId());
     }
 
-    private void renderPile(GuiGraphics graphics, int count, int x, int y)
+    /** Whether the card is one of the local player's own hand cards. */
+    private boolean isOwnHandCard(CardInstance card)
+    {
+        BlockPos ownSection = ownSeatPosition();
+        if (ownSection == null)
+        {
+            return false;
+        }
+        for (CardInstance handCard : ClientHandStore.hand(ownSection))
+        {
+            if (handCard.instanceId().equals(card.instanceId()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Draws a pile as a short fan of face-down layers. Each layer carries the
+     * card it stands for (never its face), so the pile shows the back its own
+     * pack declares — card override → set default → core back — instead of
+     * always falling back to the anonymous core back.
+     */
+    private void renderPile(GuiGraphics graphics, List<CardInstance> pile, int count, int x, int y,
+                            int width, int height, int rotationDegrees)
     {
         int layers = Math.min(PILE_MAX_LAYERS, count);
-        for (int layer = 0; layer < layers; layer++)
+        int bottom = count - layers; // index of the deepest visible card
+        for (int index = bottom; index < count; index++)
         {
-            this.drawCard(graphics, null, false, x + layer * PILE_STACK_OFFSET,
-                    y - layer * PILE_STACK_OFFSET, CARD_WIDTH, CARD_HEIGHT, false);
+            CardInstance card = pile.get(index);
+            if (this.isDragging(card))
+            {
+                continue; // held by the mouse; the pile already shows it gone
+            }
+            int layer = index - bottom;
+            this.drawCard(graphics, card, false, x + layer * PILE_STACK_OFFSET,
+                    y - layer * PILE_STACK_OFFSET, width, height, false, rotationDegrees);
         }
         if (layers == 0)
         {
             // Empty pile outline so the slot is still discoverable. It must sit
             // where a filled pile sits (y is the top-left of the bottom card),
             // otherwise the slot and its hit rect drift a card height apart.
-            graphics.renderOutline(x, y, CARD_WIDTH, CARD_HEIGHT, COLOR_PLAYFIELD_EDGE);
+            graphics.renderOutline(x, y, width, height, COLOR_PLAYFIELD_EDGE);
         }
         graphics.drawCenteredString(this.font, Component.literal(String.valueOf(count)),
-                x + CARD_WIDTH / 2 + PILE_STACK_OFFSET * layers / 2, y + 4, COLOR_TEXT_DARK);
+                x + width / 2 + PILE_STACK_OFFSET * layers / 2, y + 4, COLOR_TEXT_DARK);
     }
 
     /**
@@ -730,10 +803,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
      * steps up-right by {@link #PILE_STACK_OFFSET}, so the rect grows in those
      * two directions to keep the whole visible stack clickable.
      */
-    private static Rect pileRect(int x, int y)
+    private static Rect pileRect(int x, int y, int width, int height)
     {
         int spread = PILE_STACK_OFFSET * (PILE_MAX_LAYERS - 1);
-        return new Rect(x, y - spread, CARD_WIDTH + spread, CARD_HEIGHT + spread);
+        return new Rect(x, y - spread, width + spread, height + spread);
     }
 
     // Own hand strip: only this client's cards (delivered by HandSyncPacket),
@@ -757,7 +830,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         int overlap = HAND_CARD_WIDTH / 3;
         int stripWidth = HAND_CARD_WIDTH + (hand.size() - 1) * (HAND_CARD_WIDTH - overlap);
         int stripLeft = this.width / 2 - stripWidth / 2;
-        int stripTop = this.inventoryMainTop - HAND_CARD_HEIGHT - 10;
+        // Clamped to the screen's top edge: with the panel floated up on short
+        // windows, the unclamped strip would overflow above y=0 exactly like the
+        // panel's cap did. Overlap with the panel is acceptable — the strip's
+        // translucent backing keeps both readable.
+        int stripTop = Math.max(2, this.inventoryMainTop - HAND_CARD_HEIGHT - 10);
         this.handStripRect = new Rect(stripLeft - 4, stripTop - 4, stripWidth + 8, HAND_CARD_HEIGHT + 8);
 
         graphics.fill(this.handStripRect.x(), this.handStripRect.y(),
@@ -771,8 +848,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             int cardX = stripLeft + index * (HAND_CARD_WIDTH - overlap);
             boolean hovered = mouseX >= cardX && mouseX < cardX + HAND_CARD_WIDTH
                     && mouseY >= stripTop && mouseY < stripTop + HAND_CARD_HEIGHT;
-            this.drawCard(graphics, card, card.isFaceUp(), cardX, stripTop,
-                    HAND_CARD_WIDTH, HAND_CARD_HEIGHT, hovered);
+            // The owner always sees their own hand's face: a hand is hidden
+            // information delivered to its owner only, so a card back here
+            // would hide it from the one player entitled to read it. The
+            // persistent faceUp flag stays free for the table's orientation.
+            this.drawCard(graphics, card, true, cardX, stripTop,
+                    HAND_CARD_WIDTH, HAND_CARD_HEIGHT, hovered, card.rotation());
             if (hovered)
             {
                 hoveredName = displayNameOf(card);
@@ -780,8 +861,9 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         if (hoveredName != null)
         {
-            graphics.drawCenteredString(this.font, hoveredName, this.width / 2,
-                    stripTop - 12, COLOR_TEXT_DARK);
+            graphics.drawCenteredString(this.font,
+                    Component.translatable("gui.cardtable.hand_hint", hoveredName),
+                    this.width / 2, stripTop - 12, COLOR_TEXT_DARK);
         }
     }
 
@@ -809,12 +891,19 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     // One card: resolved textures with a graceful placeholder when the
     // definition or texture is missing; quarter-turn rotation via pose; hover ring.
     // {@code card == null} draws a face-down stack layer (pile rendering).
+    //
+    // {@code (x, y, width, height)} is the axis-aligned bounding box the card
+    // occupies on screen, and {@code rotationDegrees} its visual rotation
+    // (card rotation composed with the view rotation). For a quarter-turned
+    // card the blit rect is the AABB with width/height swapped around the
+    // shared centre, so the rotated texture covers the AABB exactly and the
+    // hover/hit rect always matches what is drawn.
     private void drawCard(GuiGraphics graphics, @Nullable CardInstance card, boolean faceUp,
-                          int x, int y, int width, int height, boolean hovered)
+                          int x, int y, int width, int height, boolean hovered, int rotationDegrees)
     {
         CardDefinition definition = card != null ? CardRegistry.get(card.definitionId()) : null;
         ResourceLocation texture = resolveTexture(definition, faceUp);
-        int rotation = card != null ? card.rotation() : 0;
+        int rotation = Math.floorMod(rotationDegrees, 360);
 
         if (texture == null)
         {
@@ -837,19 +926,31 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             return;
         }
 
+        int blitX = x;
+        int blitY = y;
+        int blitWidth = width;
+        int blitHeight = height;
+        if (rotation % 180 != 0)
+        {
+            blitX = x + (width - height) / 2;
+            blitY = y + (height - width) / 2;
+            blitWidth = height;
+            blitHeight = width;
+        }
+
         PoseStack pose = graphics.pose();
         pose.pushPose();
         if (rotation != 0)
         {
-            pose.translate(x + width / 2.0D, y + height / 2.0D, 0);
+            pose.translate(blitX + blitWidth / 2.0D, blitY + blitHeight / 2.0D, 0);
             pose.mulPose(Axis.ZP.rotationDegrees(rotation));
-            pose.translate(-width / 2.0D, -height / 2.0D, 0);
-            graphics.blit(binding.location(), 0, 0, width, height,
+            pose.translate(-blitWidth / 2.0D, -blitHeight / 2.0D, 0);
+            graphics.blit(binding.location(), 0, 0, blitWidth, blitHeight,
                     0.0F, 0.0F, binding.width(), binding.height(), binding.width(), binding.height());
         }
         else
         {
-            graphics.blit(binding.location(), x, y, width, height,
+            graphics.blit(binding.location(), blitX, blitY, blitWidth, blitHeight,
                     0.0F, 0.0F, binding.width(), binding.height(), binding.width(), binding.height());
         }
         pose.popPose();
@@ -860,13 +961,16 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
     }
 
-    // Face-down cards fall back: card override → set default → missing placeholder.
+    // Face-down cards fall back: card override → set default → core back.
+    // The last step matters for file content packs: a pack that ships no back
+    // texture must still show a card back, not the "?" missing placeholder,
+    // or every face-down card of that pack would be unreadable on the table.
     @Nullable
     private static ResourceLocation resolveTexture(@Nullable CardDefinition definition, boolean faceUp)
     {
         if (definition == null)
         {
-            return null;
+            return DEFAULT_BACK; // a card whose definition the client does not know
         }
         if (faceUp)
         {
@@ -878,7 +982,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         ResourceLocation setId = definition.cardSet();
         CardSetDefinition set = setId != null ? CardRegistry.getSet(setId) : null;
-        return set != null ? set.defaultBackTexture() : null;
+        ResourceLocation setBack = set != null ? set.defaultBackTexture() : null;
+        return setBack != null ? setBack : DEFAULT_BACK;
     }
 
     private void drawPlaceholder(GuiGraphics graphics, int x, int y, int width, int height)
@@ -908,6 +1013,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         TableGroupService.GroupView group = this.clientGroup();
         this.seats = group != null ? this.computeSeats(group) : List.of();
         this.cells = group != null ? this.computeCells(group) : List.of();
+        this.view = this.computeView();
 
         super.render(graphics, mouseX, mouseY, partialTick);
 
@@ -920,8 +1026,16 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         // authoritative reply will discard this preview on the next sync.
         if (this.drag != null)
         {
-            this.drawCard(graphics, this.drag.card(), true,
-                    mouseX - CARD_WIDTH / 2, mouseY - CARD_HEIGHT / 2, CARD_WIDTH, CARD_HEIGHT, true);
+            // A hand card shows its face while held (its owner may read it),
+            // any other card keeps the face the table gives it: holding a
+            // face-down card must not be a peek at it. The preview keeps the
+            // orientation the card will have on this player's view of the
+            // table (card rotation composed with the view rotation).
+            int previewRotation = this.view != null
+                    ? this.view.displayRotationDeg(this.drag.card().rotation()) : this.drag.card().rotation();
+            this.drawCard(graphics, this.drag.card(), this.drag.fromHand() || this.drag.card().isFaceUp(),
+                    mouseX - CARD_WIDTH / 2, mouseY - CARD_HEIGHT / 2, CARD_WIDTH, CARD_HEIGHT, true,
+                    previewRotation);
         }
     }
 
@@ -1026,15 +1140,23 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         if (!message.getString().isEmpty())
         {
-            graphics.drawCenteredString(this.font, message,
-                    this.width / 2, this.height - 34, COLOR_ERROR);
+            // The fixed bottom anchor would print the status over the open
+            // backpack's slot grid, so while the panel is shown the message is
+            // lifted just above its top border instead.
+            int statusY = this.showInventory
+                    ? Math.max(2, this.inventoryPanelTop - INVENTORY_CAP_HEIGHT - 12)
+                    : this.height - 34;
+            graphics.drawCenteredString(this.font, message, this.width / 2, statusY, COLOR_ERROR);
         }
     }
 
     // Development debug info lives in the bottom-right corner, toggled with F3.
     private void renderDebug(GuiGraphics graphics, @Nullable TableGroupService.GroupView group)
     {
-        if (!this.showDebugInfo || group == null || this.minecraft == null || this.minecraft.level == null)
+        // Suppressed while the backpack panel is open: the readout lives in the
+        // bottom-right corner and would overprint the panel's slot grid.
+        if (!this.showDebugInfo || this.showInventory
+                || group == null || this.minecraft == null || this.minecraft.level == null)
         {
             return;
         }
@@ -1078,11 +1200,9 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         TableLayoutDefinition normalized = layout.normalized();
         for (ZoneDefinition zone : normalized.zones())
         {
-            if (TableLayoutDefinition.ZONE_FREE.equals(zone.id())
-                    || TableLayoutDefinition.ZONE_HAND.equals(zone.id())
-                    || zone.scope() != ZoneDefinition.Scope.SHARED)
+            if (TableLayoutDefinition.ZONE_HAND.equals(zone.id()))
             {
-                continue; // the surface and hands keep their own readouts
+                continue; // the hand keeps its own readout
             }
             ZoneState state = debugState.getSharedZones().get(zone.id());
             lines.add(Component.literal(zoneDisplayName(zone) + ": " + (state == null ? 0 : state.size())));
@@ -1163,48 +1283,55 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             return;
         }
         UUID instanceId = this.drag.instanceId();
+        // Shift while dropping is the "play it face down" modifier; the server
+        // only honours it for a card leaving the hand (see applyPlayOrientation).
+        boolean faceDown = Screen.hasShiftDown();
 
-        // The hand strip keeps the highest priority (unchanged behavior).
+        // The hand strip keeps the highest priority (unchanged behavior). The
+        // hand target carries no seat any more: the server resolves it to the
+        // sender's own seat.
         if (this.handStripRect != null && this.handStripRect.contains(mouseX, mouseY))
         {
-            BlockPos ownSection = ownSeatPosition();
-            if (ownSection != null)
+            if (ownSeatPosition() != null)
             {
                 this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                        new ZoneRef(TableLayoutDefinition.ZONE_HAND, ownSection), null));
+                        new ZoneRef(TableLayoutDefinition.ZONE_HAND), null, false));
             }
             return;
         }
-        // Layout zones: the most specific hit wins. A pile's hit rect is small
-        // (the draw corner), a seat's free area is medium, and a zone that
-        // covers the whole playfield (the default discard pile) is the catch
-        // all, so picking the smallest hit area routes drops to the narrowest
-        // intent first. Equal areas keep the classic "visually topmost wins".
+        // Drop targets: the blank surface is the catch-all (whole playfield
+        // hit rect), layout zones win by the smallest hit area — the most
+        // specific intent first. Equal areas keep "visually topmost wins".
         ZoneHit target = this.pickZoneHit(mouseX, mouseY);
         if (target == null)
         {
             // No valid target: drop cancels, the authoritative state is unchanged.
             return;
         }
-        ZoneDefinition zone = target.zone();
-        if (zone.kind() == ZoneDefinition.Kind.STACK)
+        if (target.zone() != null && target.zone().kind() == ZoneDefinition.Kind.STACK)
         {
             this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                    new ZoneRef(zone.id(), target.sectionPos()), null));
+                    new ZoneRef(target.zoneId()), null, faceDown));
             return;
         }
-        float x = normalizeDrop(mouseX, target.rect().x(), target.rect().width());
-        float y = normalizeDrop(mouseY, target.rect().y(), target.rect().height());
-        if (zone.kind() == ZoneDefinition.Kind.GRID)
+        // Placed zones take the drop point in table space: the screen point
+        // is mapped back through the view's inverse transform, so every
+        // client reports the same group-level coordinates no matter how its
+        // view is rotated.
+        double[] tablePoint = this.view != null
+                ? this.view.screenToTable(mouseX, mouseY) : new double[] {mouseX, mouseY};
+        float x = normalizeDrop(tablePoint[0], target.tableRect().x(), target.tableRect().width());
+        float y = normalizeDrop(tablePoint[1], target.tableRect().y(), target.tableRect().height());
+        if (target.zone() != null && target.zone().kind() == ZoneDefinition.Kind.GRID)
         {
             // Client-side quantization for instant feedback; the
             // server re-quantizes idempotently (same slot wins).
-            float[] snapped = ZoneDefinition.quantizeGrid(x, y, zone.capacity());
+            float[] snapped = ZoneDefinition.quantizeGrid(x, y, target.zone().capacity());
             x = snapped[0];
             y = snapped[1];
         }
         this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                new ZoneRef(zone.id(), target.sectionPos()), new Vec2(x, y)));
+                new ZoneRef(target.zoneId()), new Vec2(x, y), faceDown));
     }
 
     /**
@@ -1328,7 +1455,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             CardInstance hovered = hoveredCard(mouseX, mouseY);
             if (hovered != null)
             {
-                this.drag = new Drag(hovered);
+                this.drag = new Drag(hovered, isOwnHandCard(hovered));
                 return true;
             }
             if (!this.seats.isEmpty())
@@ -1413,8 +1540,14 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     /** One playfield cell mapped from a table block. */
     private record Cell(BlockPos position, int x, int y, int width, int height) {}
 
-    /** The card currently held by the mouse (client-side preview only). */
-    private record Drag(CardInstance card)
+    /**
+     * The card currently held by the mouse (client-side preview only).
+     *
+     * @param fromHand whether it was picked up from the local player's own
+     *                 hand, which is the only case where the preview may show
+     *                 the face of a card the server still counts as face-down.
+     */
+    private record Drag(CardInstance card, boolean fromHand)
     {
         UUID instanceId()
         {
@@ -1427,10 +1560,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     {
     }
 
-    /** One rendered zone instance: its definition, seat (null for SHARED),
-     *  the pixel rect drops normalize against, and the (possibly pile-spread)
-     *  rect that captures hover/drop. */
-    private record ZoneHit(ZoneDefinition zone, @Nullable BlockPos sectionPos, Rect rect, Rect hitRect)
+    /**
+     * One drop target: the blank surface ({@code zone == null}, addressed by
+     * the reserved surface id) or a rendered layout zone. {@code tableRect}
+     * is the unrotated table-space rect drop points normalize against;
+     * {@code hitRect} is its on-screen bounding rect for picking.
+     */
+    private record ZoneHit(ResourceLocation zoneId, @Nullable ZoneDefinition zone, Rect tableRect, Rect hitRect)
     {
     }
 

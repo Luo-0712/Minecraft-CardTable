@@ -70,6 +70,7 @@
   "gui.cardtable.deck_layout_missing": "This deck's layout is not registered; cannot load: %s",
   "gui.cardtable.deck_stock_missing": "This deck's layout declares no stock pile",
   "gui.cardtable.action_hint": "Key %s: %s",
+  "gui.cardtable.hand_hint": "%s   Shift+drop: play face down",
   "gui.cardtable.active_set": "Set: %s",
   "gui.cardtable.active_layout": "Layout: %s",
   "action.cardtable.standard.draw": "Draw",

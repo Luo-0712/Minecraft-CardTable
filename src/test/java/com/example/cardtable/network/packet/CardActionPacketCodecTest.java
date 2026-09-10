@@ -21,15 +21,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Locks the byte-level contract of the action packet: whatever {@code encode()}
  * writes must be consumed by {@code decode()} exactly once.
  *
- * <p>Since protocol 3 the zone is addressed by its open layout id plus an
- * optional seat section; since protocol 4 {@code Perform} replaces the old
- * {@code Draw}/{@code Shuffle} kinds — pile semantics live in the pack-declared
- * action table, not in the wire format.</p>
+ * <p>Since protocol 3 the zone is addressed by its open layout id; since
+ * protocol 4 {@code Perform} replaces the old {@code Draw}/{@code Shuffle}
+ * kinds; since protocol 5 the zone ref carries no seat position any more —
+ * the blank surface is one group-level zone and the hand target is resolved
+ * to the sender's own seat server-side.</p>
  */
 class CardActionPacketCodecTest
 {
     private static final BlockPos TABLE_POS = new BlockPos(12, 64, -7);
-    private static final BlockPos SECTION_POS = new BlockPos(12, 64, -8);
     private static final UUID CARD_ID = UUID.randomUUID();
     private static final ResourceLocation PACK_ZONE =
             new ResourceLocation("cardtable", "my_tcg/bench");
@@ -40,28 +40,28 @@ class CardActionPacketCodecTest
     void moveToReservedFreeZoneRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(TableLayoutDefinition.ZONE_FREE, SECTION_POS), new Vec2(0.25F, 0.75F)));
+                new ZoneRef(TableLayoutDefinition.ZONE_FREE), new Vec2(0.25F, 0.75F), false));
     }
 
     @Test
     void moveToHandRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(TableLayoutDefinition.ZONE_HAND, SECTION_POS), null));
+                new ZoneRef(TableLayoutDefinition.ZONE_HAND), null, false));
     }
 
     @Test
-    void moveToPackZoneWithSectionRoundTrips()
+    void moveToPackZoneRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(PACK_ZONE, SECTION_POS), new Vec2(0.1F, 0.9F)));
+                new ZoneRef(PACK_ZONE), new Vec2(0.1F, 0.9F), false));
     }
 
     @Test
-    void moveToPackZoneWithoutSectionRoundTrips()
+    void faceDownPlayRequestSurvivesTheWire()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(PACK_ZONE, null), new Vec2(0.5F, 0.5F)));
+                new ZoneRef(PACK_ZONE), new Vec2(0.5F, 0.5F), true));
     }
 
     @Test
@@ -116,8 +116,9 @@ class CardActionPacketCodecTest
         CardActionPacket.Action.Move decodedMove = (CardActionPacket.Action.Move) decoded.action();
         assertEquals(move.instanceId(), decodedMove.instanceId());
         assertEquals(move.target().zoneId(), decodedMove.target().zoneId());
-        assertEquals(move.target().sectionPos(), decodedMove.target().sectionPos());
         assertVec2Equals(move.surfacePos(), decodedMove.surfacePos());
+        assertEquals(move.faceDown(), decodedMove.faceDown(),
+                "the face-down play intent must survive the round trip");
     }
 
     // Vec2 is compared component-wise: it is not guaranteed to implement equals().

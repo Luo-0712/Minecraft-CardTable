@@ -4,14 +4,12 @@
     {
       "id": "deck",
       "kind": "stack",
-      "scope": "shared",
       "rect": [0.02, 0.02, 0.06, 0.12],
       "label": { "translate": "zone.cardtable.standard.deck" }
     },
     {
       "id": "discard",
       "kind": "stack",
-      "scope": "shared",
       "rect": [0.92, 0.86, 0.06, 0.12],
       "label": { "translate": "zone.cardtable.standard.discard" }
     }

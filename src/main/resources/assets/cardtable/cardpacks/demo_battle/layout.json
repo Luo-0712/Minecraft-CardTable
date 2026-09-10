@@ -4,39 +4,21 @@
     {
       "id": "deck",
       "kind": "stack",
-      "scope": "shared",
       "rect": [0.92, 0.02, 0.06, 0.12],
       "label": { "text": "抽牌堆" }
     },
     {
       "id": "discard",
       "kind": "stack",
-      "scope": "shared",
       "rect": [0.92, 0.86, 0.06, 0.12],
       "label": { "text": "弃牌堆" }
     },
     {
       "id": "market",
       "kind": "grid",
-      "scope": "shared",
       "rect": [0.25, 0.44, 0.5, 0.12],
       "capacity": 5,
       "label": { "text": "市场" }
-    },
-    {
-      "id": "board",
-      "kind": "grid",
-      "scope": "per_seat",
-      "rect": [0.1, 0.1, 0.6, 0.28],
-      "capacity": 4,
-      "label": { "text": "战场" }
-    },
-    {
-      "id": "cardtable:free",
-      "kind": "free",
-      "scope": "per_seat",
-      "rect": [0.0, 0.6, 1.0, 0.4],
-      "label": { "text": "手边" }
     }
   ],
   "initial": { "*": "deck" },

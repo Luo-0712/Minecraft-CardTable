@@ -19,10 +19,12 @@ import java.util.UUID;
  * copy so clients can read a consistent group view from any block.
  *
  * <p>Besides identity and version it owns the shared card containers: the
- * deck item itself (so the table "remembers" which deck is in play) and the
- * generic SHARED zone instances declared by the active layout — piles are
- * just the layout's STACK zones per the kind == STACK convention. Membership
- * lives in the per-block {@link TableSectionState}.</p>
+ * deck item itself (so the table "remembers" which deck is in play), the
+ * blank table surface (the group-level free placement area, always present
+ * whether or not a deck is loaded) and the generic zone instances declared
+ * by the active layout — piles are just the layout's STACK zones per the
+ * kind == STACK convention. Membership lives in the per-block
+ * {@link TableSectionState}.</p>
  */
 public final class TableGroupState
 {
@@ -31,6 +33,7 @@ public final class TableGroupState
     private static final String DECK_TAG = "DeckItem";
     private static final String ACTIVE_SET_TAG = "ActiveSet";
     private static final String ACTIVE_LAYOUT_TAG = "ActiveLayout";
+    private static final String SURFACE_TAG = "Surface";
     private static final String ZONES_TAG = "Zones";
 
     private final UUID tableId;
@@ -43,12 +46,17 @@ public final class TableGroupState
     private CompoundTag deckStackTag;
 
     // Layout-driven state: which set/layout this table runs and the generic
-    // SHARED zone instances it declared. Null = no deck bound to this table.
+    // zone instances it declared. Null = no deck bound to this table.
     @Nullable
     private ResourceLocation activeSetId;
     @Nullable
     private ResourceLocation activeLayoutId;
     private final Map<ResourceLocation, ZoneState> sharedZones = new LinkedHashMap<>();
+
+    // The blank table surface: one group-level free placement area with
+    // playfield-normalized (0..1) coordinates. Independent of the deck
+    // lifecycle — cards can lie on the table with no deck loaded.
+    private final ZoneState surface = ZoneState.placed();
 
     // Package-private: the group identity is minted by create(), restored by
     // load(), or carried over from a legacy save by TableSectionState.
@@ -66,6 +74,7 @@ public final class TableGroupState
         this.activeSetId = source.activeSetId;
         this.activeLayoutId = source.activeLayoutId;
         source.sharedZones.forEach((id, zone) -> this.sharedZones.put(id, new ZoneState(zone)));
+        this.surface.restoreFrom(source.surface);
     }
 
     public static TableGroupState create()
@@ -89,6 +98,14 @@ public final class TableGroupState
         if (tag.contains(ACTIVE_LAYOUT_TAG, Tag.TAG_STRING))
         {
             state.activeLayoutId = new ResourceLocation(tag.getString(ACTIVE_LAYOUT_TAG));
+        }
+        if (tag.contains(SURFACE_TAG, Tag.TAG_COMPOUND))
+        {
+            ZoneState surface = ZoneState.load(tag.getCompound(SURFACE_TAG));
+            if (surface != null)
+            {
+                state.surface.restoreFrom(surface);
+            }
         }
         if (tag.contains(ZONES_TAG, Tag.TAG_COMPOUND))
         {
@@ -167,6 +184,10 @@ public final class TableGroupState
         {
             tag.putString(ACTIVE_LAYOUT_TAG, this.activeLayoutId.toString());
         }
+        if (!this.surface.isEmpty())
+        {
+            tag.put(SURFACE_TAG, this.surface.save());
+        }
         if (!this.sharedZones.isEmpty())
         {
             CompoundTag zones = new CompoundTag();
@@ -205,6 +226,16 @@ public final class TableGroupState
     }
 
     // Layout-driven state ------------------------------------------------------
+
+    /**
+     * The blank table surface: a group-level free placement area whose card
+     * coordinates are playfield-normalized (0..1). Always exists, deck or no
+     * deck, and is synced with the rest of the group state.
+     */
+    public ZoneState getSurface()
+    {
+        return this.surface;
+    }
 
     /** The set bound by the inserted deck; {@code null} = classic table. */
     @Nullable

@@ -41,10 +41,11 @@ import java.util.Objects;
  * <pre>
  * set|&lt;setId&gt;|&lt;defaultBack|->|&lt;displayJson&gt;
  * card|&lt;cardId&gt;|&lt;cardSet|-&gt;|&lt;front&gt;|&lt;back|-&gt;|&lt;sortIndex&gt;|&lt;displayJson&gt;
- * layout3|&lt;layoutId&gt;|&lt;nameEncoded|-&gt;|&lt;zoneDescriptor&gt;|...|&lt;stockDescriptor&gt;|...|&lt;actionDescriptor&gt;|...
+ * layout4|&lt;layoutId&gt;|&lt;nameEncoded|-&gt;|&lt;zoneDescriptor&gt;|...|&lt;stockDescriptor&gt;|...|&lt;actionDescriptor&gt;|...
  * </pre>
  *
- * <p>{@code zoneDescriptor} is {@code id#kind#scope#x,y,w,h#capacity#visibility#labelEncoded},
+ * <p>{@code zoneDescriptor} is {@code id#kind#x,y,w,h#capacity#visibility#labelEncoded}
+ * (all zones are group-level; the per-seat scope segment is gone),
  * {@code stockDescriptor} is {@code selector#zoneId} and {@code actionDescriptor} is
  * {@code id#type#source#target#amount#key#labelEncoded}, where {@code -} marks an
  * absent field. Zones, stocks and actions are each sorted independently, so the
@@ -305,11 +306,10 @@ public final class CardDefinitionJsonCodec
             }
             ResourceLocation target = parseZoneId(entry.getValue().getAsString(), pack);
             ZoneDefinition zone = declaredZones.get(target);
-            if (zone == null || zone.kind() != ZoneDefinition.Kind.STACK
-                    || zone.scope() != ZoneDefinition.Scope.SHARED)
+            if (zone == null || zone.kind() != ZoneDefinition.Kind.STACK)
             {
                 throw new JsonParseException("initial[" + selector + "] points at '" + target
-                        + "', which is not a declared shared stack zone");
+                        + "', which is not a declared stack zone");
             }
             builder.initial(selector, target);
         }
@@ -388,7 +388,6 @@ public final class CardDefinitionJsonCodec
         ResourceLocation zoneId = parseZoneId(rawId, pack);
 
         ZoneDefinition.Kind kind = parseEnum(requiredString(json, "kind"), ZoneDefinition.Kind.values(), "kind");
-        ZoneDefinition.Scope scope = parseEnum(requiredString(json, "scope"), ZoneDefinition.Scope.values(), "scope");
         ZoneDefinition.Visibility visibility = ZoneDefinition.Visibility.PUBLIC;
         String rawVisibility = optionalString(json, "visibility");
         if (rawVisibility != null)
@@ -431,7 +430,7 @@ public final class CardDefinitionJsonCodec
         }
 
         return ZoneDefinition.builder(zoneId)
-                .kind(kind).scope(scope)
+                .kind(kind)
                 .rect(values[0], values[1], values[2], values[3])
                 .capacity(capacity)
                 .visibility(visibility)
@@ -439,21 +438,15 @@ public final class CardDefinitionJsonCodec
                 .build();
     }
 
-    // Relative ids resolve into the pack namespace/path; the only legal
-    // namespace-bearing id is the reserved table-surface zone, so a layout
-    // can re-rect the empty table but never re-declare a built-in pile.
+    // Relative ids resolve into the pack namespace/path; namespace-bearing
+    // ids are rejected outright — the reserved ids (hand system zone, blank
+    // surface) are core-owned and never declarable by a layout.
     private static ResourceLocation parseZoneId(String rawId, PackMeta pack)
     {
         if (rawId.indexOf(':') >= 0)
         {
-            ResourceLocation full = new ResourceLocation(rawId);
-            if (CardTableMod.MODID.equals(full.getNamespace())
-                    && TableLayoutDefinition.ZONE_FREE.equals(full))
-            {
-                return full;
-            }
             throw new JsonParseException("Zone id '" + rawId + "' must be a pack-relative id"
-                    + " (or the reserved cardtable:free surface)");
+                    + " (the reserved cardtable: ids are not declarable)");
         }
         String lower = rawId.toLowerCase(Locale.ROOT);
         for (int i = 0; i < lower.length(); i++)
@@ -482,7 +475,7 @@ public final class CardDefinitionJsonCodec
     }
 
     /**
-     * The {@code layout3|} canonical line: layout name, one descriptor per
+     * The {@code layout4|} canonical line: layout name, one descriptor per
      * zone (sorted by full zone id), one per stock entry (sorted by selector)
      * and one per action (sorted by id), all with percent-encoded free text.
      * The float format ({@code Float.toString}) and the encoding are part of
@@ -498,7 +491,6 @@ public final class CardDefinitionJsonCodec
             descriptors.add(String.join("#",
                     zone.id().toString(),
                     zone.kind().name().toLowerCase(Locale.ROOT),
-                    zone.scope().name().toLowerCase(Locale.ROOT),
                     Float.toString(zone.x()) + "," + Float.toString(zone.y())
                             + "," + Float.toString(zone.w()) + "," + Float.toString(zone.h()),
                     Integer.toString(zone.capacity()),
@@ -528,7 +520,7 @@ public final class CardDefinitionJsonCodec
         actions.sort(String::compareTo);
 
         List<String> segments = new ArrayList<>();
-        segments.add("layout3");
+        segments.add("layout4");
         segments.add(layout.id().toString());
         segments.add(layout.displayName() != null ? percentEncode(layout.displayName().getString()) : CANONICAL_NULL);
         segments.addAll(descriptors);

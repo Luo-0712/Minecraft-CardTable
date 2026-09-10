@@ -14,11 +14,11 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Generic state container for a layout-declared zone instance. This is the
- * layout-driven counterpart of {@link SurfaceZone}: a STACK zone stores an
- * ordered card list (the last entry is the pile top, matching the built-in
- * piles), a FREE or GRID zone stores placed cards with normalized (0..1)
- * positions inside the zone rect (matching {@link SurfaceZone.SurfaceCard}).
+ * Generic state container for a layout-declared zone instance or for the
+ * blank table surface. A STACK zone stores an ordered card list (the last
+ * entry is the pile top), a FREE or GRID zone stores placed cards with
+ * normalized (0..1) positions — zone-local inside a declared zone rect, or
+ * playfield-global for the surface owned by {@code TableGroupState}.
  *
  * <p>Capacity is a layout rule, not state: the layout lookup happens at the
  * validation layer, so nothing here needs the registry.</p>
@@ -105,7 +105,16 @@ public final class ZoneState
     /** Deep copy: cards are immutable, so the container lists are what matters. */
     public ZoneState(ZoneState source)
     {
-        this.storage = source.storage;
+        this(source.storage);
+        this.stack.addAll(source.stack);
+        this.placed.addAll(source.placed);
+    }
+
+    /** Replaces this container's contents with a copy of {@code source}'s. */
+    public void restoreFrom(ZoneState source)
+    {
+        this.stack.clear();
+        this.placed.clear();
         this.stack.addAll(source.stack);
         this.placed.addAll(source.placed);
     }

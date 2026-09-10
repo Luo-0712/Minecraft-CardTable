@@ -19,9 +19,8 @@ import java.util.Objects;
  * <p>Two structural conventions let the core stay free of any game concept:</p>
  * <ul>
  *   <li><b>{@code kind == STACK} is a pile.</b> Every STACK zone is a
- *       deck-owned pile the core instantiates a container for (one per table
- *       group for SHARED, one per seat for PER_SEAT). Zone ids are free-form;
- *       the core never interprets them.</li>
+ *       deck-owned pile the core instantiates one group-level container for.
+ *       Zone ids are free-form; the core never interprets them.</li>
  *   <li><b>{@code initial} names the stock.</b> The layout maps a card-set
  *       selector to the STACK zone a newly inserted deck loads into. Today
  *       only the {@value #INITIAL_DEFAULT_KEY} default key exists; future
@@ -30,18 +29,22 @@ import java.util.Objects;
  * </ul>
  *
  * <p>Only two reserved ids remain: {@code cardtable:hand} is a system zone
- * that can never be declared, and {@code cardtable:free} is the empty table
- * surface itself — a full-id declaration may override rect/capacity/label but
- * never its scope/kind, and an undeclared one is implicitly provided so
- * drops always have a landing spot. {@link #normalized()} is a pure function,
- * so the server and the client can normalize the same layout id independently
- * and agree.</p>
+ * that can never be declared, and {@code cardtable:free} names the blank
+ * table surface — a group-level free placement area the core owns directly,
+ * so it is never part of a layout's zone list and declaring either id is
+ * silently skipped. {@link #normalized()} is a pure function, so the server
+ * and the client can normalize the same layout id independently and agree.</p>
  */
 public final class TableLayoutDefinition
 {
     /** Reserved hand zone: a per-seat stack rendered as the fixed hand strip. */
     public static final ResourceLocation ZONE_HAND = new ResourceLocation(CardTableMod.MODID, "hand");
-    /** Reserved free placement zone: the empty table surface (implicit in every layout). */
+    /**
+     * Reserved surface id: the blank table itself, a group-level free
+     * placement area owned by {@code TableGroupState}. Not a layout zone —
+     * it always exists (deck or no deck) and is never declarable; the id
+     * only serves as the {@code Move} target address for table drops.
+     */
     public static final ResourceLocation ZONE_FREE = new ResourceLocation(CardTableMod.MODID, "free");
 
     /** Selector key of the default stock pile; today the only supported key. */
@@ -169,10 +172,8 @@ public final class TableLayoutDefinition
 
     /**
      * Normalization (pure function). Guarantees the result is a self-consistent
-     * table: declarations of the reserved {@code hand} zone are dropped, a
-     * {@code free} declaration keeps only rect/capacity/label/visibility while
-     * scope/kind stay locked (a mismatching declaration is skipped and the
-     * implicit default takes over), the free surface is added when absent, and
+     * table: declarations of the reserved {@code hand}/{@code free} ids are
+     * dropped (the hand is a system zone and the surface is core-owned), and
      * actions/stock entries whose zones do not resolve to a declared STACK
      * zone are dropped so both peers agree on the usable action table.
      */
@@ -182,31 +183,12 @@ public final class TableLayoutDefinition
         for (ZoneDefinition zone : this.zones)
         {
             ResourceLocation zoneId = zone.id();
-            if (ZONE_HAND.equals(zoneId))
+            if (ZONE_HAND.equals(zoneId) || ZONE_FREE.equals(zoneId))
             {
-                continue; // system zone: declaring it is always invalid
+                continue; // reserved ids are never declarable layout zones
             }
-            if (ZONE_FREE.equals(zoneId))
-            {
-                ZoneDefinition builtin = builtinFreeZone();
-                if (zone.kind() != builtin.kind() || zone.scope() != builtin.scope())
-                {
-                    continue; // scope/kind tampering: skip, implicit default takes over
-                }
-                // Rebuild with the locked scope/kind so the override can never drift.
-                result.put(zoneId, ZoneDefinition.builder(zoneId)
-                        .kind(builtin.kind()).scope(builtin.scope())
-                        .rect(zone.x(), zone.y(), zone.w(), zone.h())
-                        .capacity(zone.capacity()).visibility(zone.visibility())
-                        .label(zone.label()).build());
-            }
-            else
-            {
-                result.putIfAbsent(zoneId, zone);
-            }
+            result.putIfAbsent(zoneId, zone);
         }
-        // The empty table surface always exists, even for a fully custom layout.
-        result.putIfAbsent(ZONE_FREE, builtinFreeZone());
 
         // Keep only actions the normalized layout can actually run.
         List<TableActionDefinition> actions = new ArrayList<>();
@@ -223,13 +205,12 @@ public final class TableLayoutDefinition
             actions.add(action);
         }
 
-        // Keep only stock entries pointing at a declared shared pile.
+        // Keep only stock entries pointing at a declared pile.
         Map<String, ResourceLocation> initialZones = new LinkedHashMap<>();
         for (Map.Entry<String, ResourceLocation> entry : this.initialZones.entrySet())
         {
             ZoneDefinition target = result.get(entry.getValue());
-            if (target != null && target.kind() == ZoneDefinition.Kind.STACK
-                    && target.scope() == ZoneDefinition.Scope.SHARED)
+            if (target != null && target.kind() == ZoneDefinition.Kind.STACK)
             {
                 initialZones.put(entry.getKey(), entry.getValue());
             }
@@ -237,17 +218,6 @@ public final class TableLayoutDefinition
 
         return new TableLayoutDefinition(this.id, this.displayName,
                 new ArrayList<>(result.values()), actions, initialZones);
-    }
-
-    /**
-     * The implicit table surface: the per-seat free zone keeps the player's
-     * front half of their cell (the bottom half, closest to where they sit).
-     */
-    private static ZoneDefinition builtinFreeZone()
-    {
-        return ZoneDefinition.builder(ZONE_FREE)
-                .kind(ZoneDefinition.Kind.FREE).scope(ZoneDefinition.Scope.PER_SEAT)
-                .rect(0.0F, 0.5F, 1.0F, 0.5F).build();
     }
 
     public static final class Builder

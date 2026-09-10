@@ -15,6 +15,11 @@ import java.util.UUID;
  * {@code CardDefinition}, and the only mutable physical properties the
  * rule-neutral core tracks — face orientation and quarter-turn rotation.
  *
+ * <p>{@code faceUp} is the card's orientation on the table, not a permission
+ * to look at it: a hidden hand is rendered face-up for its owner alone (the
+ * hand packet reaches nobody else), while the flag keeps describing how the
+ * card lies once it is in public view.</p>
+ *
  * <p>Saved NBT stores the definition id as a plain string, so tables survive
  * content changes; a definition that went missing renders as a placeholder
  * instead of crashing the save.</p>

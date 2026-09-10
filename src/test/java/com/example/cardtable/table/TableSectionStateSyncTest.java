@@ -16,6 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Locks the core anti-leak contract of the world-sync path: the section-state
  * tag handed to clients ({@code TableSectionState#stripHandForSync} over the
  * saved tag) must never carry a hand card's definition id, only a count.
+ * Surface cards live in the group state now, so they never appear in the
+ * section tag at all — and never need stripping.
  */
 class TableSectionStateSyncTest
 {
@@ -23,7 +25,6 @@ class TableSectionStateSyncTest
     {
         TableSectionState state = new TableSectionState();
         state.setOccupant(UUID.randomUUID());
-        state.getSurface().add(new CardInstance(new ResourceLocation("cardtable", "standard/ace_of_spades")), 0.5F, 0.5F);
         state.addHandCard(new CardInstance(new ResourceLocation("cardtable", "standard/king_of_hearts")));
         state.addHandCard(new CardInstance(new ResourceLocation("cardtable", "standard/queen_of_clubs")));
         return state;
@@ -54,12 +55,12 @@ class TableSectionStateSyncTest
     }
 
     @Test
-    void syncTagKeepsEverythingElse()
+    void sectionTagCarriesNoSurfaceAnyMore()
     {
         TableSectionState state = stateWithHand();
         CompoundTag syncTag = TableSectionState.stripHandForSync(state.save());
-        assertTrue(syncTag.getCompound("Surface").size() > 0,
-                "surface cards are shared information and stay in the sync tag");
+        assertFalse(syncTag.contains("Surface"),
+                "the surface is group-level state and must not travel in the section tag");
     }
 
     @Test
@@ -78,7 +79,6 @@ class TableSectionStateSyncTest
         TableSectionState state = stateWithHand();
         TableSectionState loaded = TableSectionState.load(TableSectionState.stripHandForSync(state.save()));
         assertEquals(0, loaded.getHandCount());
-        assertEquals(1, loaded.getSurface().size());
         assertEquals(state.getOccupantId(), loaded.getOccupantId());
     }
 }

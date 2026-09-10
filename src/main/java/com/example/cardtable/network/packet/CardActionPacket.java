@@ -22,7 +22,14 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
     /** Sealed set of table actions; records carry only what the server needs. */
     public sealed interface Action
     {
-        record Move(UUID instanceId, ZoneRef target, @Nullable Vec2 surfacePos) implements Action
+        /**
+         * @param faceDown client intent for the card's landing face: only
+         *                 honoured when the card leaves a hidden hand, and
+         *                 {@code false} (face-up) by default, so playing a
+         *                 card is always "as shown". Holding shift while
+         *                 dropping requests the opposite — a face-down play.
+         */
+        record Move(UUID instanceId, ZoneRef target, @Nullable Vec2 surfacePos, boolean faceDown) implements Action
         {
         }
 
@@ -58,8 +65,9 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
         {
             buffer.writeByte(KIND_MOVE);
             buffer.writeUUID(move.instanceId());
-            writeZone(buffer, move.target(), true);
+            writeZone(buffer, move.target());
             writeNullableVec(buffer, move.surfacePos());
+            buffer.writeBoolean(move.faceDown());
         }
         else if (action instanceof Action.Flip flip)
         {
@@ -92,8 +100,9 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
             case KIND_MOVE ->
             {
                 UUID instanceId = buffer.readUUID();
-                ZoneRef target = readZone(buffer, true);
-                yield new Action.Move(instanceId, target, readNullableVec(buffer));
+                ZoneRef target = readZone(buffer);
+                Vec2 surfacePos = readNullableVec(buffer);
+                yield new Action.Move(instanceId, target, surfacePos, buffer.readBoolean());
             }
             case KIND_FLIP -> new Action.Flip(buffer.readUUID());
             case KIND_ROTATE -> new Action.Rotate(buffer.readUUID());
@@ -115,33 +124,18 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
         context.setPacketHandled(true);
     }
 
-    private static void writeZone(FriendlyByteBuf buffer, ZoneRef zone, boolean withSectionPos)
+    private static void writeZone(FriendlyByteBuf buffer, ZoneRef zone)
     {
-        // Open id addressing: the layout-declared zone id plus an optional
-        // seat section. Scope validation (SHARED needs no section, PER_SEAT
-        // needs one) happens server-side against the active layout.
+        // Open id addressing: the layout-declared zone id, or one of the
+        // reserved ids (blank surface / own hand). The hand has no explicit
+        // seat any more — the server always resolves it to the sender's own
+        // seat.
         buffer.writeResourceLocation(zone.zoneId());
-        if (withSectionPos)
-        {
-            writeNullablePos(buffer, zone.sectionPos());
-        }
     }
 
-    private static ZoneRef readZone(FriendlyByteBuf buffer, boolean withSectionPos)
+    private static ZoneRef readZone(FriendlyByteBuf buffer)
     {
-        ResourceLocation zoneId = buffer.readResourceLocation();
-        BlockPos sectionPos = withSectionPos && buffer.readBoolean()
-                ? buffer.readBlockPos() : null;
-        return new ZoneRef(zoneId, sectionPos);
-    }
-
-    private static void writeNullablePos(FriendlyByteBuf buffer, @Nullable BlockPos pos)
-    {
-        buffer.writeBoolean(pos != null);
-        if (pos != null)
-        {
-            buffer.writeBlockPos(pos);
-        }
+        return new ZoneRef(buffer.readResourceLocation());
     }
 
     private static void writeNullableVec(FriendlyByteBuf buffer, @Nullable Vec2 vec)
