@@ -49,7 +49,7 @@ import java.util.zip.ZipFile;
  *
  * <p>Pack layout:</p>
  * <pre>
- * pack.json    { "format": 1, "id": "ns:name", "name": "...", "version": "...",
+ * pack.json    { "format": 2, "id": "ns:name", "name": "...", "version": "...",
  *                "set": { "name": "...", "back": "back" } }
  * layout.json  { "name": "...", "zones": [...], "initial": {"*": "deck"},
  *                "actions": [...] }   (mandatory)

@@ -1,14 +1,24 @@
 ---
 feature: cleanup-cardpacks-config-only
-status: designed
+status: delivered
 updated: 2026-09-11
 branch: cleanup/cardpacks-config-only
-commits: # filled at delivery
+commits: cc1ac06..e859dc2
 ---
 
 # 牌包清理：仅保留 config 路径下的 UNO 与标准扑克
 
 ## Report
+
+**What was built** — 模组 jar 不再携带任何内置牌包。标准扑克迁到版本可控的 `content-packs/standard/`（pack/layout/cards + 53 张贴图），开发时用 `scripts/sync-content-packs.ps1` 同步到 `run/config/cardtable/packs/`。`ContentPackLoader.BUILTIN_PACKS` 清空，运行时只扫描 config 文件包。删除 `demo_poker` / `demo_battle` 全部资源与 `DemoPacksFeasibilityTest`；`CardFaceStateTest` 改为 API builder 最小 layout，继续锁定翻面/手牌契约。主仓 `run/config/cardtable/packs/` 现只含 `uno_cards` 与 `standard`（已删 `demo_tcg`）。
+
+**Verification** — `./gradlew test`：BUILD SUCCESSFUL，15 个测试类共 102 用例，0 fail。`CardFaceStateTest` 7/7；content 编解码与握手测试全部通过。Review：PASS（无 critical/major）。
+
+**Journey log**
+- 主仓 `git worktree add` 被环境拦截；改为本地 clone 到 `.worktrees/cleanup-cardpacks` 并在其中建分支，避免碰主工作区未提交 UI 改动。
+- `run/` 被 gitignore：标准扑克源必须落在 `content-packs/`，否则清理后版本库无副本。
+- git rename 探测把部分相同的 demo_battle 贴图显示成 standard 的来源；实际字节来自 standard 原目录，53 张齐全。
+- `*.ps1` 默认 ignore，需 `!scripts/sync-content-packs.ps1` 例外才能把同步脚本入库。
 
 ## [S1] Problem
 
@@ -32,9 +42,9 @@ commits: # filled at delivery
 
 ## Tasks
 
-- [ ] T1: 新建 `content-packs/standard` 并迁入标准扑克 JSON+贴图 — acceptance: 目录含 pack/layout/cards/textures，内容与原内置包一致 (covers: S2.1)
-- [ ] T2: 删除 jar 内置 cardpacks 与 demo/standard 贴图 — acceptance: resources 下无 cardpacks，无 demo_*，无 standard 贴图目录，default_back 仍在 (covers: S2.2)
-- [ ] T3: 清空 BUILTIN_PACKS 并更新 javadoc — acceptance: 编译通过，不再加载内置包 (covers: S2.3)
-- [ ] T4: 删除 DemoPacksFeasibilityTest，重写 CardFaceStateTest 去 demo 依赖 — acceptance: `./gradlew test` 相关用例通过 (covers: S2.4)
-- [ ] T5: 更新 README 内容包说明 — acceptance: 文档只描述 config 路径与 content-packs 源 (covers: S2.5)
-- [ ] T6: 同步主仓 run/config 仅留 uno_cards+standard — acceptance: packs 下无 demo_tcg，有 standard 与 uno_cards (covers: S2.6)
+- [x] T1: 新建 `content-packs/standard` 并迁入标准扑克 JSON+贴图 — acceptance: 目录含 pack/layout/cards/textures，内容与原内置包一致 (covers: S2.1)
+- [x] T2: 删除 jar 内置 cardpacks 与 demo/standard 贴图 — acceptance: resources 下无 cardpacks，无 demo_*，无 standard 贴图目录，default_back 仍在 (covers: S2.2)
+- [x] T3: 清空 BUILTIN_PACKS 并更新 javadoc — acceptance: 编译通过，不再加载内置包 (covers: S2.3)
+- [x] T4: 删除 DemoPacksFeasibilityTest，重写 CardFaceStateTest 去 demo 依赖 — acceptance: `./gradlew test` 相关用例通过 (covers: S2.4)
+- [x] T5: 更新 README 内容包说明 — acceptance: 文档只描述 config 路径与 content-packs 源 (covers: S2.5)
+- [x] T6: 同步主仓 run/config 仅留 uno_cards+standard — acceptance: packs 下无 demo_tcg，有 standard 与 uno_cards (covers: S2.6)

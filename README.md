@@ -48,7 +48,7 @@ content-packs/standard/     →  run/config/cardtable/packs/standard/
 ```
 
 ```
-pack.json    { "format": 1, "id": "cardtable:standard", "name": "标准扑克",
+pack.json    { "format": 2, "id": "cardtable:standard", "name": "标准扑克",
                "version": "1.0.0",
                "set": { "name": "标准扑克", "back": "back" } }
 cards.json   [ { "id": "ace_of_spades",
