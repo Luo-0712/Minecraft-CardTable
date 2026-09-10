@@ -33,11 +33,11 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Loads card content once during common setup: built-in packs shipped inside
- * this mod's jar and user packs dropped into {@code config/cardtable/packs/}
- * (a {@code .zip} or a directory, both with the same layout). Every pack
- * goes through the same JSON codec, so the built-in standard deck dogfoods
- * the exact format the external card builder will emit.
+ * Loads card content once during common setup: packs dropped into
+ * {@code config/cardtable/packs/} (a {@code .zip} or a directory, both with
+ * the same layout). Built-in classpath packs are disabled by default
+ * ({@link #BUILTIN_PACKS} is empty); the loader path remains for optional
+ * future use. Every pack goes through the same JSON codec.
  *
  * <p>After the file-backed packs are parsed, a
  * {@link RegisterCardDefinitionsEvent} is posted on the mod bus so third-party
@@ -70,11 +70,11 @@ public final class ContentPackLoader
 
     /**
      * Built-in packs shipped under {@code assets/cardtable/cardpacks/<name>/}.
-     * {@code standard} is the official example deck; {@code demo_poker} and
-     * {@code demo_battle} are the feasibility packs proving the empty-table
-     * refactor (classic vs. multi-pile + GRID + per-seat + custom keys).
+     * Empty by default: runtime content lives only under
+     * {@code config/cardtable/packs/}. The loader path stays so a future
+     * optional built-in pack can be re-enabled without another refactor.
      */
-    private static final List<String> BUILTIN_PACKS = List.of("standard", "demo_poker", "demo_battle");
+    private static final List<String> BUILTIN_PACKS = List.of();
 
     /** Single texture size cap; larger files are treated as broken content. */
     private static final long MAX_TEXTURE_BYTES = 4L * 1024L * 1024L;

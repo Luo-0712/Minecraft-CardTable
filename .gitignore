@@ -37,6 +37,7 @@ build_output.txt
 compile_log.txt
 *.ps1
 *.py
+!scripts/sync-content-packs.ps1
 
 # ---- ForgeGradle 生成物 ----
 forge*changelog.txt

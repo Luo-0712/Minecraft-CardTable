@@ -23,7 +23,7 @@ table-api            对外稳定接口：注册与只读模型（com.example.ca
         ↑
 table-core           运行时：生命周期、保存、同步、渲染、权限（其余包）
         ↑
-内容层               内容包（config/cardtable/packs + 内置包）与第三方内容模组
+内容层               内容包（config/cardtable/packs）与第三方内容模组
 ```
 
 内容模组不得假定核心会替它执行回合、判定出牌或宣布结果。
@@ -41,7 +41,11 @@ table-core           运行时：生命周期、保存、同步、渲染、权�
 
 ### 内容包格式
 
-内容包是一个 zip 或目录，放入 `config/cardtable/packs/` 即可，两侧（客户端与服务端）都需要安装：
+运行时内容只从 `config/cardtable/packs/` 加载（zip 或目录），两侧（客户端与服务端）都需要安装。仓库内的可版本管理源包放在 `content-packs/`，开发时同步到 `run/config/cardtable/packs/`：
+
+```
+content-packs/standard/     →  run/config/cardtable/packs/standard/
+```
 
 ```
 pack.json    { "format": 1, "id": "cardtable:standard", "name": "标准扑克",
@@ -50,10 +54,12 @@ pack.json    { "format": 1, "id": "cardtable:standard", "name": "标准扑克",
 cards.json   [ { "id": "ace_of_spades",
                  "display_name": {"translate": "card.cardtable.standard.ace_of_spades"},
                  "front": "ace_of_spades", "back": "back", "sort": 0 }, ... ]
-textures/    front/back 引用的 PNG（zip/目录包专属；内置包走模组资源路径）
+layout.json  牌桌区域、初始牌堆与动作表（必填）
+textures/    front/back 引用的 PNG
 ```
 
-- `front`/`back` 是包内相对贴图路径（不带扩展名）；zip 与目录包的贴图经客户端动态注册（`cardtable_dyn:` 命名空间），内置包（jar 内 `assets/cardtable/cardpacks/`）使用普通资源路径。
+- `front`/`back` 是包内相对贴图路径（不带扩展名）；文件包贴图经客户端动态注册（`cardtable_dyn:` 命名空间）。
+- 模组 jar 默认不再打包内置牌包；标准扑克的源文件在 `content-packs/standard/`。
 - **内容一致性握手**：进服时客户端上报 `(packId, version, contentHash)`，服务端比对规范化内容的 SHA-256；缺失或不一致会被拒绝并提示具体差异。因此内容变化即使不改版本号也会被发现，构建器输出无需发版即可被检测。
 
 ### 第三方内容模组
