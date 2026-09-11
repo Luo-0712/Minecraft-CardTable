@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -77,7 +78,7 @@ class CardFaceStateTest
     void aHandCardIsPlayedFaceUpByDefault()
     {
         CardInstance card = new CardInstance(CARD_ID);
-        CardActionService.applyPlayOrientation(card, true, SURFACE, false);
+        CardActionService.applyPlayOrientation(card, true, SURFACE, false, 0);
         assertTrue(card.isFaceUp(), "playing from hand reveals the card by default");
     }
 
@@ -85,32 +86,46 @@ class CardFaceStateTest
     void aHandCardCanBePlayedFaceDownOnRequest()
     {
         CardInstance card = new CardInstance(CARD_ID);
-        CardActionService.applyPlayOrientation(card, true, SURFACE, true);
+        CardActionService.applyPlayOrientation(card, true, SURFACE, true, 0);
         assertFalse(card.isFaceUp(), "shift-drop must keep the played card hidden");
 
-        CardActionService.applyPlayOrientation(card, true, DECK_ID, true);
+        CardActionService.applyPlayOrientation(card, true, DECK_ID, true, 0);
         assertFalse(card.isFaceUp(), "the same holds for a declared zone");
     }
 
     @Test
-    void movingACardThatIsNotInHandKeepsItsFace()
+    void aHandCardLandsWithTheActorsPlayRotation()
+    {
+        CardInstance card = new CardInstance(CARD_ID);
+        CardActionService.applyPlayOrientation(card, true, SURFACE, false, 270);
+        assertEquals(270, card.rotation(),
+                "a card leaving hand must land upright on the actor's rotated view");
+    }
+
+    @Test
+    void movingACardThatIsNotInHandKeepsItsFaceAndRotation()
     {
         CardInstance faceUp = new CardInstance(CARD_ID);
         faceUp.setFaceUp(true);
-        CardActionService.applyPlayOrientation(faceUp, false, SURFACE, true);
+        faceUp.setRotation(90);
+        CardActionService.applyPlayOrientation(faceUp, false, SURFACE, true, 0);
         assertTrue(faceUp.isFaceUp(), "a revealed table card stays revealed when moved");
+        assertEquals(90, faceUp.rotation(), "table-to-table moves never reorient the card");
 
         CardInstance faceDown = new CardInstance(new ResourceLocation("cardtable", "face_state_test/hearts"));
-        CardActionService.applyPlayOrientation(faceDown, false, SURFACE, false);
+        CardActionService.applyPlayOrientation(faceDown, false, SURFACE, false, 180);
         assertFalse(faceDown.isFaceUp(), "moving a table card must never reveal it");
+        assertEquals(0, faceDown.rotation(), "an untouched rotation stays untouched");
     }
 
     @Test
     void returningACardToHandIsNeverAReveal()
     {
         CardInstance card = new CardInstance(CARD_ID);
-        CardActionService.applyPlayOrientation(card, true, HAND, false);
+        card.setRotation(90);
+        CardActionService.applyPlayOrientation(card, true, HAND, false, 0);
         assertFalse(card.isFaceUp(), "picking a card back up keeps its face for the table's sake");
+        assertEquals(90, card.rotation(), "returning to hand must not touch rotation either");
     }
 
     // Fixtures ---------------------------------------------------------------

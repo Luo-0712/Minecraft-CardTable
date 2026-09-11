@@ -19,6 +19,10 @@ import java.util.UUID;
  * entry is the pile top), a FREE or GRID zone stores placed cards with
  * normalized (0..1) positions — zone-local inside a declared zone rect, or
  * playfield-global for the surface owned by {@code TableGroupState}.
+ * Coordinates denote the card's <em>center</em>, not a corner: 0 is the
+ * rect's left/top edge and 1 its right/bottom edge, so the point is
+ * independent of card pixel size and reads the same whatever orientation
+ * the viewer sees the table from.
  *
  * <p>Capacity is a layout rule, not state: the layout lookup happens at the
  * validation layer, so nothing here needs the registry.</p>
@@ -40,7 +44,7 @@ public final class ZoneState
         PLACED
     }
 
-    /** One placed card with its normalized zone-local position. */
+    /** One placed card with its normalized zone-local center position. */
     public record PlacedCard(CardInstance card, float x, float y)
     {
         public PlacedCard
@@ -151,6 +155,7 @@ public final class ZoneState
         return this.placed;
     }
 
+    /** Places a card at a normalized zone-local center position. */
     public void addPlaced(CardInstance card, float x, float y)
     {
         this.placed.add(new PlacedCard(card, x, y));

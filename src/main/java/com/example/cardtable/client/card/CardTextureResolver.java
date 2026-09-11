@@ -86,6 +86,23 @@ public final class CardTextureResolver
         return Optional.ofNullable(STATIC_BINDINGS.computeIfAbsent(textureId, CardTextureResolver::readStaticBinding));
     }
 
+    /**
+     * Whether a texture id has a real PNG behind it. Dynamic (file pack) ids
+     * only count once they were registered, which is what lets a caller
+     * distinguish "the pack declared this" from "the file actually exists" and
+     * fall back accordingly — {@link #resolve} deliberately cannot make that
+     * distinction, as it hands out a placeholder binding for a missing static
+     * texture so a card still draws instead of vanishing.
+     */
+    public static boolean isAvailable(ResourceLocation textureId)
+    {
+        if (DYNAMIC_NAMESPACE.equals(textureId.getNamespace()))
+        {
+            return DYNAMIC_BINDINGS.containsKey(textureId);
+        }
+        return Minecraft.getInstance().getResourceManager().getResource(staticResourcePath(textureId)).isPresent();
+    }
+
     /** Drops every cached binding (client teardown / reload hygiene). */
     public static void clearCaches()
     {
@@ -93,14 +110,19 @@ public final class CardTextureResolver
         STATIC_BINDINGS.clear();
     }
 
-    // Reads the PNG IHDR chunk for the true pixel size; texture ids map to
-    // resources under textures/<path>.png, and the returned binding carries
-    // that full resource path because GuiGraphics.blit loads ids literally.
+    // Texture ids map to resources under textures/<path>.png.
+    private static ResourceLocation staticResourcePath(ResourceLocation textureId)
+    {
+        return new ResourceLocation(textureId.getNamespace(), "textures/" + textureId.getPath() + ".png");
+    }
+
+    // Reads the PNG IHDR chunk for the true pixel size; the returned binding
+    // carries that full resource path because GuiGraphics.blit loads ids
+    // literally, while the TextureManager wants the bare id.
     @Nullable
     private static Binding readStaticBinding(ResourceLocation textureId)
     {
-        ResourceLocation resourcePath = new ResourceLocation(textureId.getNamespace(),
-                "textures/" + textureId.getPath() + ".png");
+        ResourceLocation resourcePath = staticResourcePath(textureId);
         try
         {
             Optional<Resource> resource = Minecraft.getInstance().getResourceManager().getResource(resourcePath);

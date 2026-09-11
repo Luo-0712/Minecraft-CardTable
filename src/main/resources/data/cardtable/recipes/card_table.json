@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "PPP",
+    "P P",
+    "P P"
+  ],
+  "key": {
+    "P": { "item": "minecraft:quartz_block" }
+  },
+  "result": {
+    "item": "cardtable:card_table",
+    "count": 1
+  }
+}

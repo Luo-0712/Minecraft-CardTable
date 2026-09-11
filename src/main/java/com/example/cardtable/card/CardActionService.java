@@ -163,7 +163,7 @@ public final class CardActionService
             {
                 // The blank surface is one group-level instance; any seated
                 // player may place anywhere on it.
-                applyPlayOrientation(located, zoneId, move.faceDown());
+                applyPlayOrientation(located, zoneId, move.faceDown(), move.playRotation());
                 groupState.getSurface().addPlaced(located.card(), x, y);
             }
             else
@@ -201,7 +201,7 @@ public final class CardActionService
         if (zone.storage() == ZoneState.Storage.STACK)
         {
             located.removeFromZone().run();
-            applyPlayOrientation(located, zoneId, move.faceDown());
+            applyPlayOrientation(located, zoneId, move.faceDown(), move.playRotation());
             zone.addToStackTop(located.card());
             return true;
         }
@@ -218,22 +218,25 @@ public final class CardActionService
             y = snapped[1];
         }
         located.removeFromZone().run();
-        applyPlayOrientation(located, zoneId, move.faceDown());
+        applyPlayOrientation(located, zoneId, move.faceDown(), move.playRotation());
         zone.addPlaced(located.card(), x, y);
         return true;
     }
 
     /**
-     * Face of a card entering a public zone, for the one transition that
-     * defines it: leaving the owner's hand. A hand card is always played
-     * face-up (the owner sees its face anyway, so the reveal is the honest
-     * default) unless the client explicitly asked for a face-down play
-     * (shift-drop); every other move keeps whatever face the card already
-     * has, and re-entering a hand is never a reveal.
+     * Face and table-space rotation of a card entering a public zone, for the
+     * one transition that defines it: leaving the owner's hand. A hand card
+     * is always played face-up (the owner sees its face anyway, so the reveal
+     * is the honest default) unless the client explicitly asked for a
+     * face-down play (shift-drop), and lands with the client's play rotation
+     * so it stays upright on the actor's own rotated view. Every other move
+     * keeps whatever face and rotation the card already has, and re-entering
+     * a hand is never a reveal.
      */
-    private static void applyPlayOrientation(Located located, ResourceLocation targetZoneId, boolean faceDown)
+    private static void applyPlayOrientation(Located located, ResourceLocation targetZoneId,
+                                             boolean faceDown, int playRotation)
     {
-        applyPlayOrientation(located.card(), located.inHand(), targetZoneId, faceDown);
+        applyPlayOrientation(located.card(), located.inHand(), targetZoneId, faceDown, playRotation);
     }
 
     /**
@@ -242,15 +245,19 @@ public final class CardActionService
      *
      * @param fromHand    the card is leaving its owner's hidden hand
      * @param faceDown    the client asked for a face-down play (shift-drop)
+     * @param playRotation table-space quarter-turn the actor wants the card
+     *                     to land with; only applied when leaving a hand
      */
     static void applyPlayOrientation(CardInstance card, boolean fromHand,
-                                     ResourceLocation targetZoneId, boolean faceDown)
+                                     ResourceLocation targetZoneId, boolean faceDown,
+                                     int playRotation)
     {
         if (!fromHand || TableLayoutDefinition.ZONE_HAND.equals(targetZoneId))
         {
             return;
         }
         card.setFaceUp(!faceDown);
+        card.setRotation(playRotation);
     }
 
     /**

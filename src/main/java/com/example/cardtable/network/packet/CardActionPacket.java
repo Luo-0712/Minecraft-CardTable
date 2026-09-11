@@ -23,13 +23,19 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
     public sealed interface Action
     {
         /**
-         * @param faceDown client intent for the card's landing face: only
-         *                 honoured when the card leaves a hidden hand, and
-         *                 {@code false} (face-up) by default, so playing a
-         *                 card is always "as shown". Holding shift while
-         *                 dropping requests the opposite — a face-down play.
+         * @param faceDown     client intent for the card's landing face: only
+         *                     honoured when the card leaves a hidden hand, and
+         *                     {@code false} (face-up) by default, so playing a
+         *                     card is always "as shown". Holding shift while
+         *                     dropping requests the opposite — a face-down play.
+         * @param playRotation table-space quarter-turn the card should land
+         *                     with, also only honoured when leaving a hidden
+         *                     hand. The client sends the inverse of its own
+         *                     view rotation so the played card stays upright
+         *                     on the actor's screen.
          */
-        record Move(UUID instanceId, ZoneRef target, @Nullable Vec2 surfacePos, boolean faceDown) implements Action
+        record Move(UUID instanceId, ZoneRef target, @Nullable Vec2 surfacePos, boolean faceDown,
+                    int playRotation) implements Action
         {
         }
 
@@ -68,6 +74,7 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
             writeZone(buffer, move.target());
             writeNullableVec(buffer, move.surfacePos());
             buffer.writeBoolean(move.faceDown());
+            buffer.writeVarInt(move.playRotation());
         }
         else if (action instanceof Action.Flip flip)
         {
@@ -102,7 +109,8 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
                 UUID instanceId = buffer.readUUID();
                 ZoneRef target = readZone(buffer);
                 Vec2 surfacePos = readNullableVec(buffer);
-                yield new Action.Move(instanceId, target, surfacePos, buffer.readBoolean());
+                yield new Action.Move(instanceId, target, surfacePos, buffer.readBoolean(),
+                        buffer.readVarInt());
             }
             case KIND_FLIP -> new Action.Flip(buffer.readUUID());
             case KIND_ROTATE -> new Action.Rotate(buffer.readUUID());

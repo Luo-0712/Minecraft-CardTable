@@ -172,18 +172,30 @@ public final class TableView
 
     /**
      * Maps a card anchored in table pixel space to its on-screen bounding
-     * rect. The card's centre point goes through the view transform, but the
-     * card itself keeps its pixel size — width/height swapped for odd
-     * quarters, since a quarter-turned card lies sideways. Cards are
-     * fixed-size sprites, so unlike {@link #transformRect} they must never
-     * stretch with the playfield's aspect ratio.
-     *
-     * @return {@code {x, y, width, height}} in screen pixels (rounded)
+     * rect, assuming an unrotated card ({@code cardRotationDeg == 0}).
+     * Equivalent to {@link #transformCard(int, int, int, int, int)}.
      */
     public int[] transformCard(int x, int y, int cardWidth, int cardHeight)
     {
+        return this.transformCard(x, y, cardWidth, cardHeight, 0);
+    }
+
+    /**
+     * Maps a card anchored in table pixel space to its on-screen bounding
+     * rect. The card's centre point goes through the view transform, but the
+     * card itself keeps its pixel size — width/height swapped whenever the
+     * composed display rotation is an odd quarter, since the card then lies
+     * sideways on screen. Cards are fixed-size sprites, so unlike
+     * {@link #transformRect} they must never stretch with the playfield's
+     * aspect ratio.
+     *
+     * @param cardRotationDeg the card's own table-space quarter-turn (0/90/180/270)
+     * @return {@code {x, y, width, height}} in screen pixels (rounded)
+     */
+    public int[] transformCard(int x, int y, int cardWidth, int cardHeight, int cardRotationDeg)
+    {
         double[] centre = this.tableToScreen(x + cardWidth / 2.0D, y + cardHeight / 2.0D);
-        boolean sideways = this.quarters % 2 == 1;
+        boolean sideways = this.displayRotationDeg(cardRotationDeg) % 180 != 0;
         int width = sideways ? cardHeight : cardWidth;
         int height = sideways ? cardWidth : cardHeight;
         return new int[] {(int) Math.round(centre[0] - width / 2.0D),

@@ -124,6 +124,23 @@ class TableViewTest
     }
 
     @Test
+    void cardRotationCancelsTheViewRotationForTheAabb()
+    {
+        // A card that counteracts the view rotation (the play-from-hand rule)
+        // must stay upright: portrait AABB even under an odd-quarter view.
+        TableView quarter = new TableView(LEFT, TOP, WIDTH, HEIGHT, 1);
+        int[] upright = quarter.transformCard(LEFT + 10, TOP + 20, 34, 48, 270);
+        assertEquals(34, upright[2], "display rotation 0 keeps the portrait AABB");
+        assertEquals(48, upright[3]);
+
+        // The same card on an unrotated view lies sideways instead.
+        TableView flat = new TableView(LEFT, TOP, WIDTH, HEIGHT, 0);
+        int[] sideways = flat.transformCard(LEFT + 10, TOP + 20, 34, 48, 270);
+        assertEquals(48, sideways[2], "display rotation 270 swaps the AABB");
+        assertEquals(34, sideways[3]);
+    }
+
+    @Test
     void zoneRectsFollowTheRotatedTableQuadrants()
     {
         // The top-left quadrant of the table lands in the top-right quadrant

@@ -1,0 +1,11 @@
+{
+  "format": 2,
+  "id": "uno_cards",
+  "name": "UNO 测试包",
+  "version": "1.0.0",
+  "set": {
+    "name": "UNO 测试牌组",
+    "back": "back",
+    "icon": "icon_fan"
+  }
+}

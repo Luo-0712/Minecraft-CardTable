@@ -18,7 +18,9 @@ public final class NetworkHandler
     // "5": player areas removed — ZoneRef carries no seat position; the
     //      blank surface is one group-level zone and the hand target is
     //      resolved to the sender's own seat server-side.
-    private static final String PROTOCOL_VERSION = "5";
+    // "6": Move carries playRotation so a card leaving hand lands upright
+    //      on the actor's rotated view.
+    private static final String PROTOCOL_VERSION = "6";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(CardTableMod.MODID, "main"),

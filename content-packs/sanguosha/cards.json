@@ -1,0 +1,533 @@
+[
+  {
+    "id": "slash",
+    "display_name": {
+      "text": "杀"
+    },
+    "front": "slash",
+    "back": "back",
+    "sort": 0
+  },
+  {
+    "id": "fire_slash",
+    "display_name": {
+      "text": "火杀"
+    },
+    "front": "fire_slash",
+    "back": "back",
+    "sort": 1
+  },
+  {
+    "id": "thunder_slash",
+    "display_name": {
+      "text": "雷杀"
+    },
+    "front": "thunder_slash",
+    "back": "back",
+    "sort": 2
+  },
+  {
+    "id": "jink",
+    "display_name": {
+      "text": "闪"
+    },
+    "front": "jink",
+    "back": "back",
+    "sort": 3
+  },
+  {
+    "id": "peach",
+    "display_name": {
+      "text": "桃"
+    },
+    "front": "peach",
+    "back": "back",
+    "sort": 4
+  },
+  {
+    "id": "analeptic",
+    "display_name": {
+      "text": "酒"
+    },
+    "front": "analeptic",
+    "back": "back",
+    "sort": 5
+  },
+  {
+    "id": "ex_nihilo",
+    "display_name": {
+      "text": "无中生有"
+    },
+    "front": "ex_nihilo",
+    "back": "back",
+    "sort": 6
+  },
+  {
+    "id": "dismantlement",
+    "display_name": {
+      "text": "过河拆桥"
+    },
+    "front": "dismantlement",
+    "back": "back",
+    "sort": 7
+  },
+  {
+    "id": "snatch",
+    "display_name": {
+      "text": "顺手牵羊"
+    },
+    "front": "snatch",
+    "back": "back",
+    "sort": 8
+  },
+  {
+    "id": "duel",
+    "display_name": {
+      "text": "决斗"
+    },
+    "front": "duel",
+    "back": "back",
+    "sort": 9
+  },
+  {
+    "id": "fire_attack",
+    "display_name": {
+      "text": "火攻"
+    },
+    "front": "fire_attack",
+    "back": "back",
+    "sort": 10
+  },
+  {
+    "id": "collateral",
+    "display_name": {
+      "text": "借刀杀人"
+    },
+    "front": "collateral",
+    "back": "back",
+    "sort": 11
+  },
+  {
+    "id": "iron_chain",
+    "display_name": {
+      "text": "铁索连环"
+    },
+    "front": "iron_chain",
+    "back": "back",
+    "sort": 12
+  },
+  {
+    "id": "god_salvation",
+    "display_name": {
+      "text": "桃园结义"
+    },
+    "front": "god_salvation",
+    "back": "back",
+    "sort": 13
+  },
+  {
+    "id": "amazing_grace",
+    "display_name": {
+      "text": "五谷丰登"
+    },
+    "front": "amazing_grace",
+    "back": "back",
+    "sort": 14
+  },
+  {
+    "id": "savage_assault",
+    "display_name": {
+      "text": "万箭齐发"
+    },
+    "front": "savage_assault",
+    "back": "back",
+    "sort": 15
+  },
+  {
+    "id": "archery_attack",
+    "display_name": {
+      "text": "南蛮入侵"
+    },
+    "front": "archery_attack",
+    "back": "back",
+    "sort": 16
+  },
+  {
+    "id": "nullification",
+    "display_name": {
+      "text": "无懈可击"
+    },
+    "front": "nullification",
+    "back": "back",
+    "sort": 17
+  },
+  {
+    "id": "indulgence",
+    "display_name": {
+      "text": "乐不思蜀"
+    },
+    "front": "indulgence",
+    "back": "back",
+    "sort": 18
+  },
+  {
+    "id": "supply_shortage",
+    "display_name": {
+      "text": "兵粮寸断"
+    },
+    "front": "supply_shortage",
+    "back": "back",
+    "sort": 19
+  },
+  {
+    "id": "lightning",
+    "display_name": {
+      "text": "闪电"
+    },
+    "front": "lightning",
+    "back": "back",
+    "sort": 20
+  },
+  {
+    "id": "deluge",
+    "display_name": {
+      "text": "洪水"
+    },
+    "front": "deluge",
+    "back": "back",
+    "sort": 21
+  },
+  {
+    "id": "drowning",
+    "display_name": {
+      "text": "溺水"
+    },
+    "front": "drowning",
+    "back": "back",
+    "sort": 22
+  },
+  {
+    "id": "earthquake",
+    "display_name": {
+      "text": "地震"
+    },
+    "front": "earthquake",
+    "back": "back",
+    "sort": 23
+  },
+  {
+    "id": "typhoon",
+    "display_name": {
+      "text": "台风"
+    },
+    "front": "typhoon",
+    "back": "back",
+    "sort": 24
+  },
+  {
+    "id": "volcano",
+    "display_name": {
+      "text": "火山"
+    },
+    "front": "volcano",
+    "back": "back",
+    "sort": 25
+  },
+  {
+    "id": "mudslide",
+    "display_name": {
+      "text": "泥石流"
+    },
+    "front": "mudslide",
+    "back": "back",
+    "sort": 26
+  },
+  {
+    "id": "gale_shell",
+    "display_name": {
+      "text": "疾风壳"
+    },
+    "front": "gale_shell",
+    "back": "back",
+    "sort": 27
+  },
+  {
+    "id": "five_lines",
+    "display_name": {
+      "text": "五行"
+    },
+    "front": "five_lines",
+    "back": "back",
+    "sort": 28
+  },
+  {
+    "id": "shit",
+    "display_name": {
+      "text": "屎"
+    },
+    "front": "shit",
+    "back": "back",
+    "sort": 29
+  },
+  {
+    "id": "crossbow",
+    "display_name": {
+      "text": "诸葛连弩"
+    },
+    "front": "crossbow",
+    "back": "back",
+    "sort": 30
+  },
+  {
+    "id": "blade",
+    "display_name": {
+      "text": "青龙偃月刀"
+    },
+    "front": "blade",
+    "back": "back",
+    "sort": 31
+  },
+  {
+    "id": "axe",
+    "display_name": {
+      "text": "贯石斧"
+    },
+    "front": "axe",
+    "back": "back",
+    "sort": 32
+  },
+  {
+    "id": "halberd",
+    "display_name": {
+      "text": "方天画戟"
+    },
+    "front": "halberd",
+    "back": "back",
+    "sort": 33
+  },
+  {
+    "id": "qinggang_sword",
+    "display_name": {
+      "text": "青釭剑"
+    },
+    "front": "qinggang_sword",
+    "back": "back",
+    "sort": 34
+  },
+  {
+    "id": "double_sword",
+    "display_name": {
+      "text": "双股剑"
+    },
+    "front": "double_sword",
+    "back": "back",
+    "sort": 35
+  },
+  {
+    "id": "ice_sword",
+    "display_name": {
+      "text": "寒冰剑"
+    },
+    "front": "ice_sword",
+    "back": "back",
+    "sort": 36
+  },
+  {
+    "id": "guding_blade",
+    "display_name": {
+      "text": "古锭刀"
+    },
+    "front": "guding_blade",
+    "back": "back",
+    "sort": 37
+  },
+  {
+    "id": "fan",
+    "display_name": {
+      "text": "诸葛羽扇"
+    },
+    "front": "fan",
+    "back": "back",
+    "sort": 38
+  },
+  {
+    "id": "kylin_bow",
+    "display_name": {
+      "text": "麒麟弓"
+    },
+    "front": "kylin_bow",
+    "back": "back",
+    "sort": 39
+  },
+  {
+    "id": "moon_spear",
+    "display_name": {
+      "text": "龙胆枪"
+    },
+    "front": "moon_spear",
+    "back": "back",
+    "sort": 40
+  },
+  {
+    "id": "sp_moonspear",
+    "display_name": {
+      "text": "龙胆枪 SP"
+    },
+    "front": "sp_moonspear",
+    "back": "back",
+    "sort": 41
+  },
+  {
+    "id": "spear",
+    "display_name": {
+      "text": "丈八蛇矛"
+    },
+    "front": "spear",
+    "back": "back",
+    "sort": 42
+  },
+  {
+    "id": "yitian_sword",
+    "display_name": {
+      "text": "倚天剑"
+    },
+    "front": "yitian_sword",
+    "back": "back",
+    "sort": 43
+  },
+  {
+    "id": "yx_sword",
+    "display_name": {
+      "text": "雌雄双股剑"
+    },
+    "front": "yx_sword",
+    "back": "back",
+    "sort": 44
+  },
+  {
+    "id": "wooden_ox",
+    "display_name": {
+      "text": "木牛流马"
+    },
+    "front": "wooden_ox",
+    "back": "back",
+    "sort": 45
+  },
+  {
+    "id": "vscrossbow",
+    "display_name": {
+      "text": "对决连弩"
+    },
+    "front": "vscrossbow",
+    "back": "back",
+    "sort": 46
+  },
+  {
+    "id": "eight_diagram",
+    "display_name": {
+      "text": "八卦阵"
+    },
+    "front": "eight_diagram",
+    "back": "back",
+    "sort": 47
+  },
+  {
+    "id": "renwang_shield",
+    "display_name": {
+      "text": "仁王盾"
+    },
+    "front": "renwang_shield",
+    "back": "back",
+    "sort": 48
+  },
+  {
+    "id": "silver_lion",
+    "display_name": {
+      "text": "白银狮子"
+    },
+    "front": "silver_lion",
+    "back": "back",
+    "sort": 49
+  },
+  {
+    "id": "vine",
+    "display_name": {
+      "text": "藤甲"
+    },
+    "front": "vine",
+    "back": "back",
+    "sort": 50
+  },
+  {
+    "id": "dilu",
+    "display_name": {
+      "text": "的卢"
+    },
+    "front": "dilu",
+    "back": "back",
+    "sort": 51
+  },
+  {
+    "id": "jueying",
+    "display_name": {
+      "text": "绝影"
+    },
+    "front": "jueying",
+    "back": "back",
+    "sort": 52
+  },
+  {
+    "id": "zixing",
+    "display_name": {
+      "text": "紫骍"
+    },
+    "front": "zixing",
+    "back": "back",
+    "sort": 53
+  },
+  {
+    "id": "hualiu",
+    "display_name": {
+      "text": "华驴"
+    },
+    "front": "hualiu",
+    "back": "back",
+    "sort": 54
+  },
+  {
+    "id": "dayuan",
+    "display_name": {
+      "text": "大宛"
+    },
+    "front": "dayuan",
+    "back": "back",
+    "sort": 55
+  },
+  {
+    "id": "zhuahuangfeidian",
+    "display_name": {
+      "text": "爪黄飞电"
+    },
+    "front": "zhuahuangfeidian",
+    "back": "back",
+    "sort": 56
+  },
+  {
+    "id": "chitu",
+    "display_name": {
+      "text": "赤兔"
+    },
+    "front": "chitu",
+    "back": "back",
+    "sort": 57
+  },
+  {
+    "id": "monkey",
+    "display_name": {
+      "text": "猴子"
+    },
+    "front": "monkey",
+    "back": "back",
+    "sort": 58
+  }
+]

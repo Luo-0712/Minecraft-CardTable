@@ -12,5 +12,5 @@ Get-ChildItem $src -Directory | ForEach-Object {
     Copy-Item -Recurse $_.FullName $target
     Write-Host "synced $($_.Name) -> $target"
 }
-Write-Host "Packs now under $dst:"
+Write-Host "Packs now under ${dst}:"
 Get-ChildItem $dst -Directory | ForEach-Object { Write-Host "  - $($_.Name)" }

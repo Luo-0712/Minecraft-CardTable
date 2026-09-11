@@ -24,7 +24,7 @@ public final class ZoneDefinition
     {
         /** Ordered pile without coordinates; the list end is the pile top. */
         STACK,
-        /** Fixed slots ({@code capacity} = slot count); drops quantize to slot cells. */
+        /** Fixed slots ({@code capacity} = slot count); drops quantize to slot-cell centers. */
         GRID,
         /** Free placement anywhere inside the rect. */
         FREE
@@ -122,12 +122,15 @@ public final class ZoneDefinition
     }
 
     /**
-     * Snaps a zone-local normalized drop point to the center of its GRID slot.
-     * A grid is a single row of {@code capacity} columns spanning the zone
-     * width; the x coordinate picks the column and the y coordinate is pinned
-     * to the row center. Quantization is idempotent — feeding a result back
-     * yields the same point — so the client may pre-quantize for instant
-     * feedback and the server re-quantizes to the identical slot.
+     * Snaps a zone-local normalized card-<em>center</em> point to the center
+     * of its GRID slot. A grid is a single row of {@code capacity} columns
+     * spanning the zone width; the x coordinate picks the column and the y
+     * coordinate is pinned to the row center. Because both the input and the
+     * output are card centers, the returned point is also the slot cell's
+     * geometric center — the render-side cell cut uses the same rule.
+     * Quantization is idempotent — feeding a result back yields the same
+     * point — so the client may pre-quantize for instant feedback and the
+     * server re-quantizes to the identical slot.
      *
      * @return {@code {x, y}} normalized to the snapped slot center
      */

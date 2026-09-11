@@ -2,7 +2,9 @@ package com.example.cardtable.item;
 
 import com.example.cardtable.api.CardRegistry;
 import com.example.cardtable.api.CardSetDefinition;
+import com.example.cardtable.client.item.DeckItemRenderer;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -10,10 +12,12 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
+import net.minecraftforge.client.extensions.common.IClientItemExtensions;
 
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /**
  * A whole deck in one item — the physical form a content pack takes in a
@@ -54,6 +58,32 @@ public class DeckItem extends Item
         {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Hooks up the per-set icon renderer. Forge calls this exactly once, from
+     * the {@link Item} constructor, and only on the client, then caches the
+     * result — so the renderer is built lazily: at construction time there is no
+     * {@code Minecraft} instance yet, and {@link DeckItemRenderer} needs one for
+     * its render dispatcher.
+     */
+    @Override
+    public void initializeClient(Consumer<IClientItemExtensions> consumer)
+    {
+        consumer.accept(new IClientItemExtensions()
+        {
+            private BlockEntityWithoutLevelRenderer renderer;
+
+            @Override
+            public BlockEntityWithoutLevelRenderer getCustomRenderer()
+            {
+                if (renderer == null)
+                {
+                    renderer = new DeckItemRenderer();
+                }
+                return renderer;
+            }
+        });
     }
 
     /** The deck's display name from its set definition; falls back to a generic name. */

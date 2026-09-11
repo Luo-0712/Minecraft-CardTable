@@ -25,7 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * protocol 4 {@code Perform} replaces the old {@code Draw}/{@code Shuffle}
  * kinds; since protocol 5 the zone ref carries no seat position any more —
  * the blank surface is one group-level zone and the hand target is resolved
- * to the sender's own seat server-side.</p>
+ * to the sender's own seat server-side; since protocol 6 {@code Move} carries
+ * {@code playRotation} so a card leaving hand can land upright on a rotated
+ * view.</p>
  */
 class CardActionPacketCodecTest
 {
@@ -40,28 +42,28 @@ class CardActionPacketCodecTest
     void moveToReservedFreeZoneRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(TableLayoutDefinition.ZONE_FREE), new Vec2(0.25F, 0.75F), false));
+                new ZoneRef(TableLayoutDefinition.ZONE_FREE), new Vec2(0.25F, 0.75F), false, 0));
     }
 
     @Test
     void moveToHandRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(TableLayoutDefinition.ZONE_HAND), null, false));
+                new ZoneRef(TableLayoutDefinition.ZONE_HAND), null, false, 0));
     }
 
     @Test
     void moveToPackZoneRoundTrips()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(PACK_ZONE), new Vec2(0.1F, 0.9F), false));
+                new ZoneRef(PACK_ZONE), new Vec2(0.1F, 0.9F), false, 270));
     }
 
     @Test
     void faceDownPlayRequestSurvivesTheWire()
     {
         assertMoveRoundTrip(new CardActionPacket.Action.Move(CARD_ID,
-                new ZoneRef(PACK_ZONE), new Vec2(0.5F, 0.5F), true));
+                new ZoneRef(PACK_ZONE), new Vec2(0.5F, 0.5F), true, 90));
     }
 
     @Test
@@ -119,6 +121,8 @@ class CardActionPacketCodecTest
         assertVec2Equals(move.surfacePos(), decodedMove.surfacePos());
         assertEquals(move.faceDown(), decodedMove.faceDown(),
                 "the face-down play intent must survive the round trip");
+        assertEquals(move.playRotation(), decodedMove.playRotation(),
+                "the play rotation must survive the round trip");
     }
 
     // Vec2 is compared component-wise: it is not guaranteed to implement equals().

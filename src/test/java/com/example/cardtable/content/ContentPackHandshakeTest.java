@@ -72,4 +72,24 @@ class ContentPackHandshakeTest
         assertTrue(message.contains("cardtable:standard"));
         assertTrue(message.contains("mymod:fancy"));
     }
+
+    // Declaring an icon is a content change, so one peer shipping the icon and
+    // the other not shipping it must be caught — and reported against the pack
+    // that actually differs, not just "some pack mismatched".
+    @Test
+    void differingIconDeclarationFailsAndNamesThePack()
+    {
+        String legacyLine = "set|cardtable:uno_cards|cardtable:card/uno_cards/back|{\"text\":\"UNO\"}";
+        String iconLine = "set2|cardtable:uno_cards|cardtable:card/uno_cards/back|"
+                + "cardtable:card/uno_cards/icon|{\"text\":\"UNO\"}";
+
+        ContentPack server = pack("cardtable:uno_cards", "1.0.0",
+                CardDefinitionJsonCodec.contentHash(List.of(legacyLine)));
+        var client = List.of(new ContentPackHandshake.PackEntry("cardtable:uno_cards", "1.0.0",
+                CardDefinitionJsonCodec.contentHash(List.of(iconLine))));
+
+        ContentPackHandshake.CompareResult result = ContentPackHandshake.compare(List.of(server), client);
+        assertFalse(result.passed());
+        assertTrue(result.failure().getString().contains("cardtable:uno_cards"));
+    }
 }

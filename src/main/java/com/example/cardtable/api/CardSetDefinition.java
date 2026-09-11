@@ -10,6 +10,11 @@ import javax.annotation.Nullable;
  * supplies the default card back used by every member card that does not
  * override {@link CardDefinition#backTexture()}, and is also what a deck item
  * references when a player loads a whole deck onto a table.
+ *
+ * <p>A set may also declare an inventory icon ({@link #iconTexture()}), the
+ * 16x16-ish sprite the deck item is drawn with. A set without one falls back
+ * to {@link #defaultBackTexture()} and finally to the core generic icon, so
+ * packs authored before the field existed keep working unchanged.</p>
  */
 public final class CardSetDefinition
 {
@@ -19,6 +24,8 @@ public final class CardSetDefinition
     private final ResourceLocation defaultBackTexture;
     @Nullable
     private final ResourceLocation layout;
+    @Nullable
+    private final ResourceLocation iconTexture;
 
     private CardSetDefinition(Builder builder)
     {
@@ -26,6 +33,7 @@ public final class CardSetDefinition
         this.displayName = builder.displayName;
         this.defaultBackTexture = builder.defaultBackTexture;
         this.layout = builder.layout;
+        this.iconTexture = builder.iconTexture;
     }
 
     public static Builder builder(ResourceLocation id)
@@ -62,6 +70,19 @@ public final class CardSetDefinition
         return this.layout;
     }
 
+    /**
+     * Sprite used to draw this set's deck item everywhere it appears
+     * (inventory, hotbar, ground, hand, item frame, table deck slot);
+     * {@code null} falls back to {@link #defaultBackTexture()} and then to the
+     * core generic icon. Unlike the card back this is expected to be authored
+     * square, so a non-square texture is letterboxed rather than stretched.
+     */
+    @Nullable
+    public ResourceLocation iconTexture()
+    {
+        return this.iconTexture;
+    }
+
     @Override
     public String toString()
     {
@@ -76,6 +97,8 @@ public final class CardSetDefinition
         private ResourceLocation defaultBackTexture;
         @Nullable
         private ResourceLocation layout;
+        @Nullable
+        private ResourceLocation iconTexture;
 
         private Builder(ResourceLocation id)
         {
@@ -98,6 +121,16 @@ public final class CardSetDefinition
         public Builder layout(@Nullable ResourceLocation layout)
         {
             this.layout = layout;
+            return this;
+        }
+
+        /**
+         * Sprite for this set's deck item; optional, and never validated here
+         * (a missing file degrades to the card back at render time).
+         */
+        public Builder iconTexture(@Nullable ResourceLocation iconTexture)
+        {
+            this.iconTexture = iconTexture;
             return this;
         }
 

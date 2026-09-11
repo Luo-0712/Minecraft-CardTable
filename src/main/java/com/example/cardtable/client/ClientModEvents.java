@@ -2,6 +2,7 @@ package com.example.cardtable.client;
 
 import com.example.cardtable.CardTableMod;
 import com.example.cardtable.client.card.CardTextureResolver;
+import com.example.cardtable.client.item.DeckIconResolver;
 import com.example.cardtable.client.screen.CardTableScreen;
 import com.example.cardtable.menu.ModMenus;
 import net.minecraft.client.gui.screens.MenuScreens;
@@ -26,6 +27,10 @@ public final class ClientModEvents
             // Runs after the common setup froze CardRegistry, so file-pack
             // textures land in the texture manager before any card renders.
             CardTextureResolver.registerDynamicTextures();
+            // Deck icons are resolved against those textures, so drop anything
+            // memoised before this point and let it re-resolve against the
+            // freshly registered ones.
+            DeckIconResolver.clearCache();
         });
     }
 

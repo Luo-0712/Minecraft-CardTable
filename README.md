@@ -45,6 +45,7 @@ table-core           运行时：生命周期、保存、同步、渲染、权�
 
 ```
 content-packs/standard/     →  run/config/cardtable/packs/standard/
+content-packs/uno_cards/    →  run/config/cardtable/packs/uno_cards/
 ```
 
 ```
@@ -55,11 +56,13 @@ cards.json   [ { "id": "ace_of_spades",
                  "display_name": {"translate": "card.cardtable.standard.ace_of_spades"},
                  "front": "ace_of_spades", "back": "back", "sort": 0 }, ... ]
 layout.json  牌桌区域、初始牌堆与动作表（必填）
-textures/    front/back 引用的 PNG
+textures/    front/back/icon 引用的 PNG
 ```
 
-- `front`/`back` 是包内相对贴图路径（不带扩展名）；文件包贴图经客户端动态注册（`cardtable_dyn:` 命名空间）。
-- 模组 jar 默认不再打包内置牌包；标准扑克的源文件在 `content-packs/standard/`。
+- `front`/`back`/`icon` 是包内相对贴图路径（不带扩展名）；文件包贴图经客户端动态注册（`cardtable_dyn:` 命名空间）。
+- 模组 jar 默认不再打包内置牌包；标准扑克与 UNO 的源文件分别在 `content-packs/standard/` 与 `content-packs/uno_cards/`。
+- **`set.icon`（可选）**：牌组物品在背包、快捷栏、掉落物、手持、展示框和牌桌插槽里显示的图标，写法与 `back` 相同，例如 `"set": { "name": "UNO", "back": "back", "icon": "icon" }`（对应 `textures/icon.png`）。按 **16×16** 提供能铺满；给非正方图（如 2:3 的牌背）时自动等比缩放并居中留白，不会拉伸。**不写也不会报错**，退回链为 `set.icon` → `set.back` 的缩图 → 模组内置的通用牌组图标；声明了但文件缺失同样继续往下退，绝不阻断加载。
+- 改 `set.icon` 等同于改内容：`contentHash` 随之变化，两端不一致会被上述握手点名（这一点与是否升 `version` 无关）。
 - **内容一致性握手**：进服时客户端上报 `(packId, version, contentHash)`，服务端比对规范化内容的 SHA-256；缺失或不一致会被拒绝并提示具体差异。因此内容变化即使不改版本号也会被发现，构建器输出无需发版即可被检测。
 
 ### 第三方内容模组

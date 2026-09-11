@@ -40,9 +40,17 @@ import java.util.Objects;
  *
  * <pre>
  * set|&lt;setId&gt;|&lt;defaultBack|->|&lt;displayJson&gt;
+ * set2|&lt;setId&gt;|&lt;defaultBack|->|&lt;icon|->|&lt;displayJson&gt;
  * card|&lt;cardId&gt;|&lt;cardSet|-&gt;|&lt;front&gt;|&lt;back|-&gt;|&lt;sortIndex&gt;|&lt;displayJson&gt;
  * layout4|&lt;layoutId&gt;|&lt;nameEncoded|-&gt;|&lt;zoneDescriptor&gt;|...|&lt;stockDescriptor&gt;|...|&lt;actionDescriptor&gt;|...
  * </pre>
+ *
+ * <p>The {@code set} line is versioned by its own prefix: {@code set2} is
+ * emitted only for a pack that declares {@code set.icon}, while a pack
+ * without one keeps the original {@code set} line byte for byte. Upgrading
+ * every pack to the longer prefix would change the hash of packs whose
+ * content did not actually change, disconnecting them from older peers for
+ * no reason; this mirrors the {@code layout3} → {@code layout4} upgrade.</p>
  *
  * <p>{@code zoneDescriptor} is {@code id#kind#x,y,w,h#capacity#visibility#labelEncoded}
  * (all zones are group-level; the per-seat scope segment is gone),
@@ -73,8 +81,12 @@ public final class CardDefinitionJsonCodec
     /** The {@code pack.json} header of a content pack. */
     public record PackMeta(ResourceLocation id, String name, String version, @Nullable SetMeta set)
     {
-        /** Optional set declared by the pack; {@code back} is a pack-relative texture path. */
-        public record SetMeta(String name, @Nullable String back)
+        /**
+         * Optional set declared by the pack; {@code back} and {@code icon} are
+         * pack-relative texture paths. {@code icon} is the deck item sprite and
+         * is optional: older packs omit it and fall back to {@code back}.
+         */
+        public record SetMeta(String name, @Nullable String back, @Nullable String icon)
         {
         }
     }
@@ -108,8 +120,12 @@ public final class CardDefinitionJsonCodec
         if (json.has("set") && json.get("set").isJsonObject())
         {
             JsonObject setJson = json.getAsJsonObject("set");
+            // Unknown keys (including a future icon declaration on an older
+            // build) are ignored rather than rejected, so a pack authored for
+            // a newer format still loads here instead of failing the pack.
             setMeta = new PackMeta.SetMeta(requiredString(setJson, "name"),
-                    optionalString(setJson, "back"));
+                    optionalString(setJson, "back"),
+                    optionalString(setJson, "icon"));
         }
         return new PackMeta(id, name, version, setMeta);
     }
@@ -168,6 +184,10 @@ public final class CardDefinitionJsonCodec
     /**
      * Registers the pack's optional set, bound to {@code layoutId} (the pack
      * layout registered under the same id), and returns its canonical line.
+     *
+     * <p>A declared icon switches the line to the {@code set2} prefix (see the
+     * class javadoc); a pack without one keeps emitting the original
+     * {@code set} line, so its hash is unchanged by this feature.</p>
      */
     @Nullable
     public static String registerSet(PackMeta pack, TextureMapper textures,
@@ -180,16 +200,27 @@ public final class CardDefinitionJsonCodec
             return null;
         }
         ResourceLocation back = setMeta.back() != null ? textures.textureId(setMeta.back()) : null;
+        // A declared icon that does not resolve to a file keeps its id; the
+        // client renderer falls back to the back texture when the texture
+        // cannot be bound, so a typo never rejects the pack.
+        ResourceLocation icon = setMeta.icon() != null ? textures.textureId(setMeta.icon()) : null;
         CardSetDefinition set = CardSetDefinition.builder(pack.id())
                 .displayName(Component.literal(setMeta.name()))
                 .defaultBackTexture(back)
                 .layout(layoutId)
+                .iconTexture(icon)
                 .build();
         sink.accept(set);
-        return String.join(CANONICAL_SEPARATOR, "set",
-                set.id().toString(),
-                back != null ? back.toString() : CANONICAL_NULL,
-                Component.Serializer.toJson(set.displayName()).toString());
+        String prefix = icon != null ? "set2" : "set";
+        List<String> segments = icon != null
+                ? List.of(prefix, set.id().toString(),
+                        back != null ? back.toString() : CANONICAL_NULL,
+                        icon.toString(),
+                        Component.Serializer.toJson(set.displayName()).toString())
+                : List.of(prefix, set.id().toString(),
+                        back != null ? back.toString() : CANONICAL_NULL,
+                        Component.Serializer.toJson(set.displayName()).toString());
+        return String.join(CANONICAL_SEPARATOR, segments);
     }
 
     // layout.json (format 2) ------------------------------------------------

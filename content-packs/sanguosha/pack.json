@@ -1,0 +1,11 @@
+{
+  "format": 2,
+  "id": "cardtable:sanguosha",
+  "name": "三国杀",
+  "version": "1.0.0",
+  "set": {
+    "name": "三国杀",
+    "back": "back",
+    "icon": "icon"
+  }
+}
