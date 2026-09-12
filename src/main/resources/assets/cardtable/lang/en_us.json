@@ -71,6 +71,7 @@
   "gui.cardtable.deck_stock_missing": "This deck's layout declares no stock pile",
   "gui.cardtable.action_hint": "Key %s: %s",
   "gui.cardtable.hand_hint": "%s   Shift+drop: play face down",
+  "gui.cardtable.hand_overflow": "Hand %s–%s / %s   Wheel or middle-drag to pan",
   "gui.cardtable.active_set": "Set: %s",
   "gui.cardtable.active_layout": "Layout: %s",
   "action.cardtable.standard.draw": "Draw",

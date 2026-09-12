@@ -148,8 +148,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     // same 34:48 (roughly poker) aspect ratio.
     private static final int CARD_WIDTH = 34;
     private static final int CARD_HEIGHT = 48;
-    private static final int HAND_CARD_WIDTH = 30;
-    private static final int HAND_CARD_HEIGHT = 42;
+    private static final int HAND_CARD_WIDTH = HandStripLayout.CARD_WIDTH;
+    private static final int HAND_CARD_HEIGHT = HandStripLayout.CARD_HEIGHT;
     private static final int SLOT_SIZE = 18;
     private static final int CELL_GAP = 4;
     private static final int PILE_STACK_OFFSET = 2;
@@ -209,6 +209,16 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private Drag drag;
     @Nullable
     private Rect handStripRect;
+    /**
+     * Horizontal pan of the own-hand strip when the fan is longer than the
+     * window. Purely a client view offset; the server never sees it. Reset to
+     * 0 whenever the hand fits without scrolling.
+     */
+    private int handScrollOffset;
+    /** True while the middle mouse button is panning the hand strip. */
+    private boolean handPanning;
+    /** Mouse x at the moment the current pan started, for drag-to-scroll. */
+    private double handPanLastMouseX;
 
     // Layout-driven render state, rebuilt every frame by renderZones():
     // drop/hover targets in render order (last entry = topmost) and the cards
@@ -1084,6 +1094,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     // fanned along the bottom centre of the screen with a hover highlight. The
     // strip is the player's main point of contact with the table, so it sits in
     // the reserved band they are already looking at rather than on the board.
+    //
+    // Overflow: the fan first compresses its pitch (down to MIN_PITCH) so every
+    // card stays partially visible; when even that cannot fit, the strip becomes
+    // a scissored viewport over the longer content row and pans by
+    // handScrollOffset (wheel / middle-drag). Cards outside the viewport are
+    // neither drawn nor hit-tested.
     private void renderHand(GuiGraphics graphics, int mouseX, int mouseY)
     {
         List<CardInstance> hand = ownHandCards();
@@ -1092,25 +1108,44 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             this.handStripRect = null;
             return;
         }
-        int overlap = HAND_CARD_WIDTH / 3;
-        int stripWidth = HAND_CARD_WIDTH + (hand.size() - 1) * (HAND_CARD_WIDTH - overlap);
-        int stripLeft = this.width / 2 - stripWidth / 2;
+        int cardCount = hand.size();
+        int viewportWidth = HandStripLayout.viewportWidth(this.width);
+        int pitch = HandStripLayout.pitch(cardCount, viewportWidth);
+        int contentWidth = HandStripLayout.contentWidth(cardCount, pitch);
+        boolean overflow = HandStripLayout.isOverflow(contentWidth, viewportWidth);
+        this.handScrollOffset = HandStripLayout.clampScroll(
+                overflow ? this.handScrollOffset : 0, contentWidth, viewportWidth);
+
+        int viewportLeft = HandStripLayout.VIEWPORT_PAD_X;
+        // Comfortable/compressed hands stay centred inside the viewport; a
+        // scrolled fan pins its content origin to the viewport's left edge and
+        // pans with handScrollOffset instead.
+        int contentOriginX = overflow
+                ? viewportLeft
+                : viewportLeft + Math.max(0, (viewportWidth - contentWidth) / 2);
         // Bottom-anchored inside the reserved band; on windows too short to
         // hold the band at all, the playfield's lower edge is the hard limit
         // instead (the strip then wins the overlap it cannot avoid).
         int stripTop = Math.max(playfieldBottom() + 2,
                 this.height - HAND_CARD_HEIGHT - HAND_BOTTOM_MARGIN);
-        this.handStripRect = new Rect(stripLeft - 4, stripTop - 4, stripWidth + 8, HAND_CARD_HEIGHT + 8);
+        this.handStripRect = new Rect(viewportLeft, stripTop - 4,
+                viewportWidth, HAND_CARD_HEIGHT + 8);
 
         graphics.fill(this.handStripRect.x(), this.handStripRect.y(),
                 this.handStripRect.x() + this.handStripRect.width(),
                 this.handStripRect.y() + this.handStripRect.height(), COLOR_PANEL);
 
+        // Clip so partial cards at a scrolled edge never paint outside the
+        // viewport; the full-width panel plate behind them stays unclipped.
+        graphics.enableScissor(viewportLeft, stripTop,
+                viewportLeft + viewportWidth, stripTop + HAND_CARD_HEIGHT);
         Component hoveredName = null;
-        for (int index = 0; index < hand.size(); index++)
+        int[] visible = HandStripLayout.visibleRange(
+                cardCount, pitch, this.handScrollOffset, viewportWidth);
+        for (int index = visible[0]; index < visible[1]; index++)
         {
             CardInstance card = hand.get(index);
-            int cardX = stripLeft + index * (HAND_CARD_WIDTH - overlap);
+            int cardX = contentOriginX + index * pitch - this.handScrollOffset;
             boolean hovered = mouseX >= cardX && mouseX < cardX + HAND_CARD_WIDTH
                     && mouseY >= stripTop && mouseY < stripTop + HAND_CARD_HEIGHT;
             // The owner always sees their own hand's face: a hand is hidden
@@ -1124,12 +1159,60 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 hoveredName = displayNameOf(card);
             }
         }
+        graphics.disableScissor();
+
+        if (overflow)
+        {
+            this.renderHandOverflowChrome(graphics, contentWidth, viewportWidth, viewportLeft,
+                    stripTop, cardCount, hoveredName == null);
+        }
+
         if (hoveredName != null)
         {
             this.drawCenteredLabel(graphics,
                     Component.translatable("gui.cardtable.hand_hint", hoveredName),
                     this.width / 2, stripTop - 12, COLOR_HOVER);
         }
+    }
+
+    /**
+     * Edge fades and a position badge shown only while the hand is scrolled.
+     * The fades mark that more cards exist off-viewport; the badge reads as
+     * "visible-range / total" so the player always knows how much of the hand
+     * is currently in view. The badge yields to a hover name so the two never
+     * fight for the same line.
+     */
+    private void renderHandOverflowChrome(GuiGraphics graphics, int contentWidth, int viewportWidth,
+                                          int viewportLeft, int stripTop, int cardCount,
+                                          boolean showBadge)
+    {
+        int fade = Math.min(18, viewportWidth / 8);
+        if (fade > 1)
+        {
+            if (this.handScrollOffset > 0)
+            {
+                graphics.fillGradient(viewportLeft, stripTop,
+                        viewportLeft + fade, stripTop + HAND_CARD_HEIGHT,
+                        COLOR_EDGE_FADE, 0x00000000);
+            }
+            int maxScroll = HandStripLayout.maxScroll(contentWidth, viewportWidth);
+            if (this.handScrollOffset < maxScroll)
+            {
+                graphics.fillGradient(viewportLeft + viewportWidth - fade, stripTop,
+                        viewportLeft + viewportWidth, stripTop + HAND_CARD_HEIGHT,
+                        0x00000000, COLOR_EDGE_FADE);
+            }
+        }
+        if (!showBadge)
+        {
+            return;
+        }
+        int pitch = HandStripLayout.pitch(cardCount, viewportWidth);
+        int[] visible = HandStripLayout.visibleRange(
+                cardCount, pitch, this.handScrollOffset, viewportWidth);
+        Component badge = Component.translatable("gui.cardtable.hand_overflow",
+                visible[0] + 1, visible[1], cardCount);
+        this.drawCenteredLabel(graphics, badge, this.width / 2, stripTop - 12, COLOR_TEXT_DIM);
     }
 
     @Nullable
@@ -1623,17 +1706,78 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         if (this.handStripRect != null && this.handStripRect.contains(mouseX, mouseY))
         {
             List<CardInstance> hand = ownHandCards();
-            int overlap = HAND_CARD_WIDTH / 3;
-            for (int index = hand.size() - 1; index >= 0; index--)
+            int index = this.handCardIndexAt(mouseX, mouseY, hand.size());
+            if (index >= 0 && index < hand.size())
             {
-                int cardX = this.handStripRect.x() + 4 + index * (HAND_CARD_WIDTH - overlap);
-                if (hitTest(mouseX, mouseY, cardX, this.handStripRect.y() + 4, HAND_CARD_WIDTH, HAND_CARD_HEIGHT))
-                {
-                    return hand.get(index);
-                }
+                return hand.get(index);
             }
         }
         return null;
+    }
+
+    /**
+     * Index of the own-hand card under the cursor, honouring the current
+     * pitch, centre-origin and scroll offset. Returns -1 when the point is
+     * outside the strip or over empty space.
+     */
+    private int handCardIndexAt(double mouseX, double mouseY, int cardCount)
+    {
+        if (cardCount <= 0 || this.handStripRect == null)
+        {
+            return -1;
+        }
+        int viewportLeft = HandStripLayout.VIEWPORT_PAD_X;
+        int viewportWidth = HandStripLayout.viewportWidth(this.width);
+        int pitch = HandStripLayout.pitch(cardCount, viewportWidth);
+        int contentWidth = HandStripLayout.contentWidth(cardCount, pitch);
+        boolean overflow = HandStripLayout.isOverflow(contentWidth, viewportWidth);
+        int contentOriginX = overflow
+                ? viewportLeft
+                : viewportLeft + Math.max(0, (viewportWidth - contentWidth) / 2);
+        int stripTop = this.handStripRect.y() + 4;
+        for (int index = cardCount - 1; index >= 0; index--)
+        {
+            int cardX = contentOriginX + index * pitch - this.handScrollOffset;
+            if (hitTest(mouseX, mouseY, cardX, stripTop, HAND_CARD_WIDTH, HAND_CARD_HEIGHT))
+            {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * True when the strip is long enough to pan and the cursor sits over it.
+     * Wheel and middle-drag scrolling only engage in that case so a normal
+     * hand never steals the scroll from the rest of the UI.
+     */
+    private boolean handScrollEngaged(double mouseX, double mouseY)
+    {
+        List<CardInstance> hand = ownHandCards();
+        if (hand.isEmpty() || this.handStripRect == null || !this.handStripRect.contains(mouseX, mouseY))
+        {
+            return false;
+        }
+        int viewportWidth = HandStripLayout.viewportWidth(this.width);
+        int pitch = HandStripLayout.pitch(hand.size(), viewportWidth);
+        return HandStripLayout.isOverflow(
+                HandStripLayout.contentWidth(hand.size(), pitch), viewportWidth);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta)
+    {
+        if (this.drag == null && this.handScrollEngaged(mouseX, mouseY))
+        {
+            List<CardInstance> hand = ownHandCards();
+            int viewportWidth = HandStripLayout.viewportWidth(this.width);
+            int pitch = HandStripLayout.pitch(hand.size(), viewportWidth);
+            int contentWidth = HandStripLayout.contentWidth(hand.size(), pitch);
+            this.handScrollOffset = HandStripLayout.applyScroll(
+                    this.handScrollOffset, delta, contentWidth, viewportWidth);
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     private static boolean hitTest(double mouseX, double mouseY, int x, int y, int width, int height)
@@ -1827,6 +1971,14 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button)
     {
+        // Middle-drag pans an overflowing hand strip. Checked before left-click
+        // so a pan never also starts a card drag.
+        if (button == 2 && this.handScrollEngaged(mouseX, mouseY))
+        {
+            this.handPanning = true;
+            this.handPanLastMouseX = mouseX;
+            return true;
+        }
         if (button == 0)
         {
             // The backpack toggle intercepts the click (and must not also trigger
@@ -1872,6 +2024,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button)
     {
+        if (button == 2)
+        {
+            this.handPanning = false;
+        }
         if (button == 0 && this.drag != null)
         {
             this.finishDrag(mouseX, mouseY);
@@ -1882,10 +2038,23 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     }
 
     // While a card is held the mouse drag belongs to it, not to vanilla's
-    // slot quick-craft logic.
+    // slot quick-craft logic. Middle-drag pans an overflowing hand strip.
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY)
     {
+        if (this.handPanning)
+        {
+            List<CardInstance> hand = ownHandCards();
+            int viewportWidth = HandStripLayout.viewportWidth(this.width);
+            int pitch = HandStripLayout.pitch(hand.size(), viewportWidth);
+            int contentWidth = HandStripLayout.contentWidth(hand.size(), pitch);
+            // Dragging right reveals earlier cards (content moves right → offset shrinks).
+            this.handScrollOffset = HandStripLayout.clampScroll(
+                    this.handScrollOffset - (mouseX - this.handPanLastMouseX),
+                    contentWidth, viewportWidth);
+            this.handPanLastMouseX = mouseX;
+            return true;
+        }
         if (this.drag != null)
         {
             return true;
