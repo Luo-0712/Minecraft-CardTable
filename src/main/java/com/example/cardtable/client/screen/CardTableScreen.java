@@ -13,6 +13,8 @@ import com.example.cardtable.card.ZoneState;
 import com.example.cardtable.client.ClientHandStore;
 import com.example.cardtable.client.ClientTableNotices;
 import com.example.cardtable.client.ModKeyBindings;
+import com.example.cardtable.client.anim.CardAnimationTracker;
+import com.example.cardtable.client.anim.CardFlyAnimation;
 import com.example.cardtable.client.card.CardTextureResolver;
 import com.example.cardtable.menu.CardTableMenu;
 import com.example.cardtable.network.NetworkHandler;
@@ -44,6 +46,7 @@ import org.lwjgl.glfw.GLFW;
 import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -205,6 +208,14 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     /** Card currently held by the mouse; only a client preview, the server owns the real move. */
     @Nullable
     private Drag drag;
+    /**
+     * Own-drop flight so a remote server's RTT does not freeze the table:
+     * the card leaves its source the moment the mouse comes up and flies to
+     * the predicted target; the next authoritative sync still owns the result.
+     */
+    private final CardAnimationTracker animations = new CardAnimationTracker();
+    /** Last-frame STACK visual rects by zone id, used as local-flight destinations. */
+    private final Map<ResourceLocation, Rect> pileAnchors = new LinkedHashMap<>();
     @Nullable
     private Rect handStripRect;
     /**
@@ -263,6 +274,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     {
         super.removed();
         ClientTableNotices.clear();
+        this.animations.clear();
+        this.pileAnchors.clear();
     }
 
     // Slot positions are irrelevant server-side; only the client lays them
@@ -777,6 +790,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         List<ZoneHit> hits = new ArrayList<>();
         this.renderedCards = cards;
         this.zoneHits = hits;
+        this.pileAnchors.clear();
         this.layoutMissing = false;
         if (this.minecraft == null || this.minecraft.level == null || this.view == null)
         {
@@ -841,32 +855,36 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             List<CardInstance> pile = stackOf(zone, groupState);
             int count = pile.size();
-            if (this.drag != null && containsInstance(pile, this.drag.instanceId()))
+            if (!pile.isEmpty()
+                    && (this.isDragging(pile.get(pile.size() - 1))
+                    || this.isLocallyFlying(pile.get(pile.size() - 1).instanceId())))
             {
-                count--; // pile top is on the mouse
+                count--; // pile top is on the mouse or in a local flight
             }
             // A pile is anchored at the centre of its zone rect: for a corner
             // pile (draw) that is nearly the corner itself, while a zone that
             // covers the whole playfield (the default discard pile) lands in
             // the middle of the table. The anchor is derived in table space
             // so the rotation carries it to the right screen spot; the pile's
-            // cards keep their pixel size (swap for odd quarters).
-            int[] pileAabb = tableView.transformCard(
-                    tableRect.x() + (tableRect.width() - CARD_WIDTH) / 2,
-                    tableRect.y() + (tableRect.height() - CARD_HEIGHT) / 2,
-                    CARD_WIDTH, CARD_HEIGHT);
+            // cards keep their natural pixel size under the view's turn.
+            double[] pileCentre = tableView.tableToScreen(
+                    tableRect.x() + tableRect.width() / 2.0D,
+                    tableRect.y() + tableRect.height() / 2.0D);
+            int pileCentreX = (int) Math.round(pileCentre[0]);
+            int pileCentreY = (int) Math.round(pileCentre[1]);
+            int pileRotation = tableView.displayRotationDeg(0);
             // Drop capture is the whole zone rect, not just the visible stack:
             // this is what lets a full-playfield discard pile catch every
             // otherwise-unmatched drop. Grabbing the top card still uses the
             // small pile rect (see the rendered-card entry below).
             hits.add(new ZoneHit(zone.id(), zone, tableRect, rect));
-            this.renderPile(graphics, pile, count, pileAabb[0], pileAabb[1], pileAabb[2], pileAabb[3],
-                    tableView.displayRotationDeg(0));
+            Rect grab = pileRect(pileCentreX, pileCentreY, pileRotation);
+            this.pileAnchors.put(zone.id(), grab);
+            this.renderPile(graphics, pile, count, pileCentreX, pileCentreY, pileRotation);
             this.drawZoneLabel(graphics, zone, rect);
             if (!pile.isEmpty())
             {
                 // The whole stack is grabbable; hover resolves to its top card.
-                Rect grab = pileRect(pileAabb[0], pileAabb[1], pileAabb[2], pileAabb[3]);
                 cards.add(new RenderedCard(pile.get(pile.size() - 1), grab.x(), grab.y(),
                         grab.width(), grab.height()));
             }
@@ -886,26 +904,28 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
      * frame's hover list. {@code tableRect} is the unrotated pixel rect the
      * entries' normalized coordinates are relative to: the zone rect for a
      * layout zone, the whole playfield for the blank surface. Position
-     * mapping happens in table space (identical for every client); the view
-     * transform then places and turns the card. Cards are fixed-size
-     * sprites, so they go through transformCard (exact pixel swap) rather
-     * than the aspect-stretching rect map.
+     * mapping happens in table space (identical for every client);
+     * {@link TableView#transformCard} yields the on-screen footprint for
+     * hit-testing, while drawing just moves that centre at natural size
+     * under the display turn.
      */
     private void renderPlacedCards(GuiGraphics graphics, List<ZoneState.PlacedCard> placed, Rect tableRect,
                                    List<RenderedCard> cards, int mouseX, int mouseY, TableView tableView)
     {
         for (ZoneState.PlacedCard entry : placed)
         {
-            if (this.isDragging(entry.card()))
+            if (this.isDragging(entry.card()) || this.isLocallyFlying(entry.card().instanceId()))
             {
-                continue; // held by the mouse; the zone already shows it gone
+                continue; // held or in local flight; the zone already shows it gone
             }
             int[] position = placedCardPosition(tableRect, entry);
             int[] aabb = tableView.transformCard(position[0], position[1], CARD_WIDTH, CARD_HEIGHT,
                     entry.card().rotation());
             boolean hovered = hitTest(mouseX, mouseY, aabb[0], aabb[1], aabb[2], aabb[3]);
+            int centreX = aabb[0] + aabb[2] / 2;
+            int centreY = aabb[1] + aabb[3] / 2;
             this.drawCard(graphics, entry.card(), entry.card().isFaceUp(),
-                    aabb[0], aabb[1], aabb[2], aabb[3], hovered,
+                    centreX, centreY, CARD_WIDTH, CARD_HEIGHT, hovered,
                     tableView.displayRotationDeg(entry.card().rotation()));
             cards.add(new RenderedCard(entry.card(), aabb[0], aabb[1], aabb[2], aabb[3]));
         }
@@ -996,11 +1016,6 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 ? master.getGroupState() : null;
     }
 
-    private static boolean containsInstance(List<CardInstance> cards, UUID instanceId)
-    {
-        return cards.stream().anyMatch(card -> card.instanceId().equals(instanceId));
-    }
-
     private boolean isDragging(CardInstance card)
     {
         return this.drag != null && this.drag.instanceId().equals(card.instanceId());
@@ -1028,45 +1043,57 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
      * Draws a pile as a short fan of face-down layers. Each layer carries the
      * card it stands for (never its face), so the pile shows the back its own
      * pack declares — card override → set default → core back — instead of
-     * always falling back to the anonymous core back.
+     * always falling back to the anonymous core back. {@code (centreX, centreY)}
+     * is the bottom card's visual centre; further layers step up-right.
      */
-    private void renderPile(GuiGraphics graphics, List<CardInstance> pile, int count, int x, int y,
-                            int width, int height, int rotationDegrees)
+    private void renderPile(GuiGraphics graphics, List<CardInstance> pile, int count,
+                            int centreX, int centreY, int rotationDegrees)
     {
         int layers = Math.min(PILE_MAX_LAYERS, count);
         int bottom = count - layers; // index of the deepest visible card
         for (int index = bottom; index < count; index++)
         {
             CardInstance card = pile.get(index);
-            if (this.isDragging(card))
+            if (this.isDragging(card) || this.isLocallyFlying(card.instanceId()))
             {
-                continue; // held by the mouse; the pile already shows it gone
+                continue; // held or in local flight; the pile already shows it gone
             }
             int layer = index - bottom;
-            this.drawCard(graphics, card, false, x + layer * PILE_STACK_OFFSET,
-                    y - layer * PILE_STACK_OFFSET, width, height, false, rotationDegrees);
+            this.drawCard(graphics, card, false,
+                    centreX + layer * PILE_STACK_OFFSET, centreY - layer * PILE_STACK_OFFSET,
+                    CARD_WIDTH, CARD_HEIGHT, false, rotationDegrees);
         }
+        int rotation = Math.floorMod(rotationDegrees, 360);
+        boolean sideways = rotation % 180 != 0;
+        int footprintWidth = sideways ? CARD_HEIGHT : CARD_WIDTH;
+        int footprintHeight = sideways ? CARD_WIDTH : CARD_HEIGHT;
+        int left = centreX - footprintWidth / 2;
+        int top = centreY - footprintHeight / 2;
         if (layers == 0)
         {
-            // Empty pile outline so the slot is still discoverable. It must sit
-            // where a filled pile sits (y is the top-left of the bottom card),
-            // otherwise the slot and its hit rect drift a card height apart.
-            graphics.renderOutline(x, y, width, height, COLOR_PLAYFIELD_EDGE);
+            // Empty pile outline so the slot is still discoverable.
+            graphics.renderOutline(left, top, footprintWidth, footprintHeight, COLOR_PLAYFIELD_EDGE);
         }
         this.drawCenteredLabel(graphics, Component.literal(String.valueOf(count)),
-                x + width / 2 + PILE_STACK_OFFSET * layers / 2, y + 4, COLOR_HOVER);
+                centreX + PILE_STACK_OFFSET * layers / 2, top + 4, COLOR_HOVER);
     }
 
     /**
      * Hit area of one pile, anchored the same way {@link #renderPile} draws it:
-     * {@code (x, y)} is the top-left of the bottom card, and every further layer
-     * steps up-right by {@link #PILE_STACK_OFFSET}, so the rect grows in those
+     * the bottom card's visual centre, with every further layer stepping
+     * up-right by {@link #PILE_STACK_OFFSET}, so the rect grows in those
      * two directions to keep the whole visible stack clickable.
      */
-    private static Rect pileRect(int x, int y, int width, int height)
+    private static Rect pileRect(int centreX, int centreY, int rotationDegrees)
     {
+        int rotation = Math.floorMod(rotationDegrees, 360);
+        boolean sideways = rotation % 180 != 0;
+        int width = sideways ? CARD_HEIGHT : CARD_WIDTH;
+        int height = sideways ? CARD_WIDTH : CARD_HEIGHT;
         int spread = PILE_STACK_OFFSET * (PILE_MAX_LAYERS - 1);
-        return new Rect(x, y - spread, width + spread, height + spread);
+        int left = centreX - width / 2;
+        int top = centreY - height / 2;
+        return new Rect(left, top - spread, width + spread, height + spread);
     }
 
     /**
@@ -1082,8 +1109,14 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             return List.of();
         }
         return ClientHandStore.hand(ownSection).stream()
-                .filter(card -> !this.isDragging(card))
+                .filter(card -> !this.isDragging(card) && !this.isLocallyFlying(card.instanceId()))
                 .toList();
+    }
+
+    /** True while a local own-drop flight still owns this card's on-screen presence. */
+    private boolean isLocallyFlying(UUID instanceId)
+    {
+        return this.animations.isFlying(instanceId);
     }
 
     // Own hand strip: only this client's cards (delivered by HandSyncPacket),
@@ -1169,7 +1202,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             // information delivered to its owner only, so a card back here
             // would hide it from the one player entitled to read it. The
             // persistent faceUp flag stays free for the table's orientation.
-            this.drawCard(graphics, card, true, cardX, stripTop,
+            this.drawCard(graphics, card, true,
+                    cardX + HAND_CARD_WIDTH / 2, stripTop + HAND_CARD_HEIGHT / 2,
                     HAND_CARD_WIDTH, HAND_CARD_HEIGHT, hovered, card.rotation());
             if (hovered)
             {
@@ -1256,25 +1290,31 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     // definition or texture is missing; quarter-turn rotation via pose; hover ring.
     // {@code card == null} draws a face-down stack layer (pile rendering).
     //
-    // {@code (x, y, width, height)} is the axis-aligned bounding box the card
-    // occupies on screen, and {@code rotationDegrees} its visual rotation
-    // (card rotation composed with the view rotation). For a quarter-turned
-    // card the blit rect is the AABB with width/height swapped around the
-    // shared centre, so the rotated texture covers the AABB exactly and the
-    // hover/hit rect always matches what is drawn.
+    // Contract: callers pass the card's visual centre, its natural sprite size
+    // (always portrait on screen: 34x48 table / hand strip), and the display
+    // rotation (card turn composed with the view). The pose does the turn;
+    // width/height are never swapped by the caller. A sideways card therefore
+    // keeps its landscape footprint while held or placed — dragging is just
+    // translating the centre. Hover/placeholder use the rotated footprint.
     private void drawCard(GuiGraphics graphics, @Nullable CardInstance card, boolean faceUp,
-                          int x, int y, int width, int height, boolean hovered, int rotationDegrees)
+                          int centreX, int centreY, int cardWidth, int cardHeight,
+                          boolean hovered, int rotationDegrees)
     {
         CardDefinition definition = card != null ? CardRegistry.get(card.definitionId()) : null;
         ResourceLocation texture = resolveTexture(definition, faceUp);
         int rotation = Math.floorMod(rotationDegrees, 360);
+        boolean sideways = rotation % 180 != 0;
+        int footprintWidth = sideways ? cardHeight : cardWidth;
+        int footprintHeight = sideways ? cardWidth : cardHeight;
+        int left = centreX - footprintWidth / 2;
+        int top = centreY - footprintHeight / 2;
 
         if (texture == null)
         {
-            this.drawPlaceholder(graphics, x, y, width, height);
+            this.drawPlaceholder(graphics, left, top, footprintWidth, footprintHeight);
             if (hovered)
             {
-                graphics.renderOutline(x - 1, y - 1, width + 2, height + 2, COLOR_HOVER);
+                graphics.renderOutline(left - 1, top - 1, footprintWidth + 2, footprintHeight + 2, COLOR_HOVER);
             }
             return;
         }
@@ -1282,45 +1322,28 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         CardTextureResolver.Binding binding = CardTextureResolver.resolve(texture).orElse(null);
         if (binding == null)
         {
-            this.drawPlaceholder(graphics, x, y, width, height);
+            this.drawPlaceholder(graphics, left, top, footprintWidth, footprintHeight);
             if (hovered)
             {
-                graphics.renderOutline(x - 1, y - 1, width + 2, height + 2, COLOR_HOVER);
+                graphics.renderOutline(left - 1, top - 1, footprintWidth + 2, footprintHeight + 2, COLOR_HOVER);
             }
             return;
         }
 
-        int blitX = x;
-        int blitY = y;
-        int blitWidth = width;
-        int blitHeight = height;
-        if (rotation % 180 != 0)
-        {
-            blitX = x + (width - height) / 2;
-            blitY = y + (height - width) / 2;
-            blitWidth = height;
-            blitHeight = width;
-        }
-
         PoseStack pose = graphics.pose();
         pose.pushPose();
+        pose.translate(centreX, centreY, 0);
         if (rotation != 0)
         {
-            pose.translate(blitX + blitWidth / 2.0D, blitY + blitHeight / 2.0D, 0);
             pose.mulPose(Axis.ZP.rotationDegrees(rotation));
-            pose.translate(-blitWidth / 2.0D, -blitHeight / 2.0D, 0);
-            graphics.blit(binding.location(), 0, 0, blitWidth, blitHeight,
-                    0.0F, 0.0F, binding.width(), binding.height(), binding.width(), binding.height());
         }
-        else
-        {
-            graphics.blit(binding.location(), blitX, blitY, blitWidth, blitHeight,
-                    0.0F, 0.0F, binding.width(), binding.height(), binding.width(), binding.height());
-        }
+        pose.translate(-cardWidth / 2.0D, -cardHeight / 2.0D, 0);
+        graphics.blit(binding.location(), 0, 0, cardWidth, cardHeight,
+                0.0F, 0.0F, binding.width(), binding.height(), binding.width(), binding.height());
         pose.popPose();
         if (hovered)
         {
-            graphics.renderOutline(x - 1, y - 1, width + 2, height + 2, COLOR_HOVER);
+            graphics.renderOutline(left - 1, top - 1, footprintWidth + 2, footprintHeight + 2, COLOR_HOVER);
         }
     }
 
@@ -1398,6 +1421,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
         this.renderSeats(graphics, mouseX, mouseY);
         this.renderHand(graphics, mouseX, mouseY);
+        this.renderFlights(graphics);
         this.renderNotice(graphics);
         this.renderStatus(graphics);
         this.renderSideHelp(graphics, group);
@@ -1420,16 +1444,39 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             // Stick to the cursor at the grab point (offset from the card
             // centre), so picking up near an edge does not yank the card
             // centre under the mouse and releasing does not re-centre it.
-            int drawX = (int) Math.round(mouseX - this.drag.grabOffsetX()) - CARD_WIDTH / 2;
-            int drawY = (int) Math.round(mouseY - this.drag.grabOffsetY()) - CARD_HEIGHT / 2;
+            // Natural size + pose turn: a sideways table card stays sideways
+            // while held — the preview is just that centre translating.
+            int centreX = (int) Math.round(mouseX - this.drag.grabOffsetX());
+            int centreY = (int) Math.round(mouseY - this.drag.grabOffsetY());
             this.drawCard(graphics, this.drag.card(), this.drag.fromHand() || this.drag.card().isFaceUp(),
-                    drawX, drawY, CARD_WIDTH, CARD_HEIGHT, true,
+                    centreX, centreY, CARD_WIDTH, CARD_HEIGHT, true,
                     previewRotation);
         }
 
         // Topmost layer: the backpack is painted after everything else, so no
         // board content can ever cover it.
         this.renderInventoryOverlay(graphics, mouseX, mouseY);
+    }
+
+    /**
+     * Own-drop flights only: drawn above the board and hand so a card leaving
+     * the strip or a pile reads as motion, not a teleport, while the server
+     * round-trip is still in flight.
+     */
+    private void renderFlights(GuiGraphics graphics)
+    {
+        long now = System.currentTimeMillis();
+        this.animations.tick(now);
+        for (CardFlyAnimation flight : this.animations.flights())
+        {
+            int[] rect = flight.rectAt(now);
+            int centreX = rect[0] + rect[2] / 2;
+            int centreY = rect[1] + rect[3] / 2;
+            CardInstance card = flight.card();
+            boolean faceUp = flight.faceUp() || (card != null && card.isFaceUp());
+            this.drawCard(graphics, card, faceUp, centreX, centreY,
+                    CARD_WIDTH, CARD_HEIGHT, false, flight.rotationAt(now));
+        }
     }
 
     private void renderSeats(GuiGraphics graphics, int mouseX, int mouseY)
@@ -1896,14 +1943,17 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     }
 
     // Resolves the drop target under the mouse and asks the server to move
-    // the dragged card; invalid drops simply cancel the preview.
+    // the dragged card; invalid drops simply cancel the preview. A valid
+    // drop also starts a local flight immediately so a remote RTT does not
+    // leave the card frozen under the cursor.
     private void finishDrag(double mouseX, double mouseY)
     {
         if (this.drag == null)
         {
             return;
         }
-        UUID instanceId = this.drag.instanceId();
+        Drag drag = this.drag;
+        UUID instanceId = drag.instanceId();
         // Shift while dropping is the "play it face down" modifier; the server
         // only honours it for a card leaving the hand (see applyPlayOrientation).
         boolean faceDown = Screen.hasShiftDown();
@@ -1918,6 +1968,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             {
                 this.sendAction(new CardActionPacket.Action.Move(instanceId,
                         new ZoneRef(TableLayoutDefinition.ZONE_HAND), null, false, 0));
+                Rect strip = this.handStripRect;
+                spawnLocalFlight(drag,
+                        new Rect(strip.x() + (strip.width() - HAND_CARD_WIDTH) / 2,
+                                strip.y() + (strip.height() - HAND_CARD_HEIGHT) / 2,
+                                HAND_CARD_WIDTH, HAND_CARD_HEIGHT),
+                        drag.card().rotation(), drag.card().isFaceUp());
             }
             return;
         }
@@ -1934,6 +1990,16 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             this.sendAction(new CardActionPacket.Action.Move(instanceId,
                     new ZoneRef(target.zoneId()), null, faceDown, playRotation));
+            Rect pile = this.pileAnchors.get(target.zoneId());
+            if (pile == null)
+            {
+                Rect hit = target.hitRect();
+                pile = new Rect(hit.x() + (hit.width() - CARD_WIDTH) / 2,
+                        hit.y() + (hit.height() - CARD_HEIGHT) / 2, CARD_WIDTH, CARD_HEIGHT);
+            }
+            int toRotation = this.view != null ? this.view.displayRotationDeg(0) : 0;
+            spawnLocalFlight(drag, pile, toRotation,
+                    drag.fromHand() ? !faceDown : drag.card().isFaceUp());
             return;
         }
         // Placed zones take the drop point in table space: the screen point
@@ -1942,8 +2008,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         // view is rotated. The point is the card's visual centre under the
         // cursor (grab offset applied), not the raw mouse — matching the
         // preview so release never nudges the card.
-        double centreX = mouseX - this.drag.grabOffsetX();
-        double centreY = mouseY - this.drag.grabOffsetY();
+        double centreX = mouseX - drag.grabOffsetX();
+        double centreY = mouseY - drag.grabOffsetY();
         double[] tablePoint = this.view != null
                 ? this.view.screenToTable(centreX, centreY) : new double[] {centreX, centreY};
         float x = normalizeDrop(tablePoint[0], target.tableRect().x(), target.tableRect().width());
@@ -1958,6 +2024,29 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         this.sendAction(new CardActionPacket.Action.Move(instanceId,
                 new ZoneRef(target.zoneId()), new Vec2(x, y), faceDown, playRotation));
+        int cardTableRotation = drag.fromHand() ? playRotation : drag.card().rotation();
+        Rect tableRect = target.tableRect();
+        int tableLeft = tableRect.x() + Math.round(x * tableRect.width()) - CARD_WIDTH / 2;
+        int tableTop = tableRect.y() + Math.round(y * tableRect.height()) - CARD_HEIGHT / 2;
+        int[] aabb = this.view != null
+                ? this.view.transformCard(tableLeft, tableTop, CARD_WIDTH, CARD_HEIGHT, cardTableRotation)
+                : new int[] {tableLeft, tableTop, CARD_WIDTH, CARD_HEIGHT};
+        int toRotation = this.view != null
+                ? this.view.displayRotationDeg(cardTableRotation) : cardTableRotation;
+        spawnLocalFlight(drag, new Rect(aabb[0], aabb[1], aabb[2], aabb[3]), toRotation,
+                drag.fromHand() ? !faceDown : drag.card().isFaceUp());
+    }
+
+    /**
+     * Starts the own-drop flight immediately. Purely visual: the server still
+     * validates and the next sync overwrites whatever it rejected.
+     */
+    private void spawnLocalFlight(Drag drag, Rect toAabb, int toRotation, boolean faceUp)
+    {
+        this.animations.spawnLocalPlay(drag.card(), drag.instanceId(),
+                drag.originX(), drag.originY(), drag.originWidth(), drag.originHeight(),
+                toAabb.x(), toAabb.y(), toAabb.width(), toAabb.height(),
+                drag.originRotation(), toRotation, faceUp, System.currentTimeMillis());
     }
 
     /**
@@ -2112,8 +2201,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 // on release — the drop lands where the preview was painted.
                 double centerX = hovered.x() + hovered.width() / 2.0D;
                 double centerY = hovered.y() + hovered.height() / 2.0D;
-                this.drag = new Drag(hovered.card(), isOwnHandCard(hovered.card()),
-                        mouseX - centerX, mouseY - centerY);
+                boolean fromHand = isOwnHandCard(hovered.card());
+                int originRotation = fromHand || this.view == null
+                        ? hovered.card().rotation()
+                        : this.view.displayRotationDeg(hovered.card().rotation());
+                this.drag = new Drag(hovered.card(), fromHand,
+                        mouseX - centerX, mouseY - centerY,
+                        hovered.x(), hovered.y(), hovered.width(), hovered.height(), originRotation);
                 return true;
             }
             if (!this.seats.isEmpty())
@@ -2226,8 +2320,16 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
      *                    jump when picked up off-centre, and the drop lands
      *                    exactly where the preview painted it.
      * @param grabOffsetY same as {@code grabOffsetX} on the y axis.
+     * @param originX screen AABB of the card at grab time — the local flight's
+     *                take-off point, so a drop leaves the strip/pile at once.
+     * @param originY see {@code originX}
+     * @param originWidth see {@code originX}
+     * @param originHeight see {@code originX}
+     * @param originRotation display rotation at grab time (view turn included
+     *                       for table cards).
      */
-    private record Drag(CardInstance card, boolean fromHand, double grabOffsetX, double grabOffsetY)
+    private record Drag(CardInstance card, boolean fromHand, double grabOffsetX, double grabOffsetY,
+                        int originX, int originY, int originWidth, int originHeight, int originRotation)
     {
         UUID instanceId()
         {
