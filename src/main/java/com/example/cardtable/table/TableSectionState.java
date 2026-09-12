@@ -29,11 +29,19 @@ public final class TableSectionState
     private static final String OCCUPANT_TAG = "Occupant";
     private static final String VERSION_TAG = "Version";
     private static final String HAND_TAG = "Hand";
+    /** Public count written by {@link #stripHandForSync}; read back on the client. */
+    private static final String HAND_COUNT_TAG = "HandCount";
 
     @Nullable
     private UUID occupantId;
     private long version;
     private final List<CardInstance> hand = new ArrayList<>();
+    /**
+     * Count advertised by the stripped world-sync tag. Meaningful on the
+     * client after a broadcast load, where {@link #hand} is always empty;
+     * the server keeps it at 0 and reports {@code hand.size()} instead.
+     */
+    private int publicHandCount;
 
     public TableSectionState()
     {
@@ -51,6 +59,12 @@ public final class TableSectionState
         long version = tag.contains(VERSION_TAG) ? tag.getLong(VERSION_TAG) : 0L;
         TableSectionState state = new TableSectionState(occupantId, version);
         state.hand.addAll(CardInstance.loadAll(tag.getList(HAND_TAG, Tag.TAG_COMPOUND)));
+        // Stripped world-sync tags carry only the public count; full saves
+        // never write it and keep the real hand list instead.
+        if (tag.contains(HAND_COUNT_TAG))
+        {
+            state.publicHandCount = Math.max(0, tag.getInt(HAND_COUNT_TAG));
+        }
         return state;
     }
 
@@ -100,7 +114,7 @@ public final class TableSectionState
     public static CompoundTag stripHandForSync(CompoundTag savedState)
     {
         CompoundTag tag = savedState.copy();
-        tag.putInt("HandCount", tag.getList(HAND_TAG, Tag.TAG_COMPOUND).size());
+        tag.putInt(HAND_COUNT_TAG, tag.getList(HAND_TAG, Tag.TAG_COMPOUND).size());
         tag.remove(HAND_TAG);
         return tag;
     }
@@ -130,9 +144,14 @@ public final class TableSectionState
         return this.hand;
     }
 
+    /**
+     * Public hand size: the live list on the server, or the count the
+     * stripped update tag advertised on the client (where {@link #hand}
+     * never loads). Never the hand's contents.
+     */
     public int getHandCount()
     {
-        return this.hand.size();
+        return this.hand.isEmpty() ? this.publicHandCount : this.hand.size();
     }
 
     /** Takes {@code count} cards from the end of the hand (rightmost); used for the hand packet. */

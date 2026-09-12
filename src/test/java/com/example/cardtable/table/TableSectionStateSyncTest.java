@@ -74,11 +74,12 @@ class TableSectionStateSyncTest
     }
 
     @Test
-    void strippedTagReloadsWithoutHand()
+    void strippedTagReloadsWithoutHandButKeepsCount()
     {
         TableSectionState state = stateWithHand();
         TableSectionState loaded = TableSectionState.load(TableSectionState.stripHandForSync(state.save()));
-        assertEquals(0, loaded.getHandCount());
+        assertEquals(0, loaded.getHand().size(), "hand contents must never load from the stripped tag");
+        assertEquals(2, loaded.getHandCount(), "the public count is what the update tag advertises");
         assertEquals(state.getOccupantId(), loaded.getOccupantId());
     }
 }

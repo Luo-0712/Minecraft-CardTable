@@ -15,7 +15,7 @@ public final class ModBlocks
 
     // The tabletop block used as the entry point for card table interactions
     public static final RegistryObject<Block> CARD_TABLE = BLOCKS.register("card_table", () -> new CardTableBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.WOOD).strength(2.5F)));
+            BlockBehaviour.Properties.of().mapColor(MapColor.QUARTZ).strength(2.5F)));
 
     private ModBlocks()
     {

@@ -122,6 +122,12 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int SEAT_SIZE = 26;
     /** Seat ring inset from the screen edges. */
     private static final int SEAT_INSET = 40;
+    // Mini face-down stack beside a remote seat: public hand size, no faces.
+    private static final int SEAT_HAND_CARD_WIDTH = 12;
+    private static final int SEAT_HAND_CARD_HEIGHT = 17;
+    private static final int SEAT_HAND_STACK_OFFSET = 1;
+    private static final int SEAT_HAND_MAX_LAYERS = 3;
+    private static final int SEAT_HAND_GAP = 4;
     /**
      * Height of the band the playfield leaves free along the bottom of the
      * screen, holding the own seat plate and the hand strip. Both are UI the
@@ -156,8 +162,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int PILE_STACK_OFFSET = 2;
     private static final int PILE_MAX_LAYERS = 5;
 
-    // Palette derived from the table texture: warm wood, cream accents.
-    private static final int COLOR_WOOD_DARK = 0xFF5A3D26;
+    // UI palette: warm browns and cream accents that sit on the quartz board texture.
+    private static final int COLOR_RIM = 0xFF5A3D26;
     private static final int COLOR_PLAYFIELD_EDGE = 0xFF6B4A2F;
     private static final int COLOR_SEAT = 0xFF6B4A2F;
     private static final int COLOR_SEAT_EMPTY = 0x904A3624;
@@ -167,7 +173,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     /**
      * Status and error text. Bright on purpose: it is drawn on
      * {@link #COLOR_LABEL_BG}, and the old dark red was only legible against the
-     * light wood it used to sit on directly — on a dark plate it collapsed into
+     * light board it used to sit on directly — on a dark plate it collapsed into
      * the background.
      */
     private static final int COLOR_ERROR = 0xFFFF8A73;
@@ -178,7 +184,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int COLOR_PANEL_EDGE = 0xFF6B4A2F;
     /**
      * Backing plate for every piece of screen text. Text on this screen sits
-     * over the wood texture, the translucent playfield, card backs, seat plates
+     * over the board texture, the translucent playfield, card backs, seat plates
      * and bare world, so it is never drawn loose: a dark plate under each label
      * makes the text readable regardless of what it lands on. Warm-toned to sit
      * with the board, and translucent enough that content underneath still
@@ -188,7 +194,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     /** Height of the soft fade band blending board content into the screen edge. */
     private static final int EDGE_FADE_HEIGHT = 36;
-    /** Semi-transparent dark-wood tint used by the edge fade (matches the rim). */
+    /** Semi-transparent dark board tint used by the edge fade (matches the rim). */
     private static final int COLOR_EDGE_FADE = 0xB23A2A1A;
 
     private final Map<UUID, Player> resolvedPlayers = new HashMap<>();
@@ -401,7 +407,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 seatY = ownSeatY();
             }
             UUID occupantId = this.occupantAt(positions.get(index));
-            slots.add(new SeatSlot(index, seatX, seatY, occupantId));
+            slots.add(new SeatSlot(index, seatX, seatY, positions.get(index), occupantId));
         }
         return slots;
     }
@@ -550,7 +556,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         int boardHeight = this.height;
         graphics.blit(TABLE_TEXTURE, boardLeft, boardTop, boardWidth, boardHeight,
                 0.0F, 0.0F, 16, 16, 16, 16);
-        graphics.renderOutline(boardLeft, boardTop, boardWidth, boardHeight, COLOR_WOOD_DARK);
+        graphics.renderOutline(boardLeft, boardTop, boardWidth, boardHeight, COLOR_RIM);
 
         // The play area is the full board (no inset, no rim line): one blank
         // surface covering the table. It still stops above the bottom band so
@@ -567,7 +573,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     /**
      * Soft fade band across the top of the playfield. The topmost card rows
      * run into the window edge on short screens and the hard cut looks abrupt;
-     * melting them into a dark wood tint reads as a deliberate vignette. The
+     * melting them into a dark board tint reads as a deliberate vignette. The
      * band stops at the playfield's side edges so the deck slot and backpack
      * toggle (outside it, top-right) stay crisp. Drawn as the last playfield
      * pass so every card participates, while seats and the hand strip
@@ -1501,12 +1507,16 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 graphics.fill(left, top, left + SEAT_SIZE, top + SEAT_SIZE, COLOR_SEAT);
             }
 
-            int outline = self ? COLOR_SEAT_SELF : hovered && joinable ? COLOR_HOVER : COLOR_WOOD_DARK;
+            int outline = self ? COLOR_SEAT_SELF : hovered && joinable ? COLOR_HOVER : COLOR_RIM;
             graphics.renderOutline(left, top, SEAT_SIZE, SEAT_SIZE, outline);
 
             if (seat.occupantId() != null)
             {
                 this.renderOccupant(graphics, seat, left, top);
+                if (!self)
+                {
+                    this.renderSeatHandStack(graphics, seat);
+                }
             }
             else
             {
@@ -1536,11 +1546,115 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     }
 
     /**
+     * Public hand size for one remote seat: a short fan of face-down cards
+     * tucked between the seat plate and the board, with the count on the
+     * stack's outer corner. Contents stay hidden — only the size is public.
+     * Empty hands draw nothing; the own seat is skipped (the hand strip
+     * already shows the real cards).
+     */
+    private void renderSeatHandStack(GuiGraphics graphics, SeatSlot seat)
+    {
+        int count = this.handCountAt(seat.sectionPos());
+        if (count <= 0)
+        {
+            return;
+        }
+
+        // Stack sits on the seat's board-facing side so it reads as "in front
+        // of that player", never covering the portrait or the name line.
+        double dx = this.width / 2.0D - seat.x();
+        double dy = this.height / 2.0D - seat.y();
+        double length = Math.sqrt(dx * dx + dy * dy);
+        if (length < 1.0D)
+        {
+            dx = 0.0D;
+            dy = 1.0D;
+            length = 1.0D;
+        }
+        double offset = SEAT_SIZE / 2.0D + SEAT_HAND_CARD_WIDTH / 2.0D + SEAT_HAND_GAP;
+        int centreX = seat.x() + (int) Math.round(dx / length * offset);
+        int centreY = seat.y() + (int) Math.round(dy / length * offset);
+
+        int layers = Math.min(SEAT_HAND_MAX_LAYERS, count);
+        CardTextureResolver.Binding binding = CardTextureResolver
+                .resolve(this.resolveHandBackTexture()).orElse(null);
+        for (int layer = 0; layer < layers; layer++)
+        {
+            int left = centreX + layer * SEAT_HAND_STACK_OFFSET - SEAT_HAND_CARD_WIDTH / 2;
+            int top = centreY - layer * SEAT_HAND_STACK_OFFSET - SEAT_HAND_CARD_HEIGHT / 2;
+            if (binding != null)
+            {
+                graphics.blit(binding.location(), left, top,
+                        SEAT_HAND_CARD_WIDTH, SEAT_HAND_CARD_HEIGHT,
+                        0.0F, 0.0F, binding.width(), binding.height(),
+                        binding.width(), binding.height());
+            }
+            else
+            {
+                graphics.fill(left, top, left + SEAT_HAND_CARD_WIDTH, top + SEAT_HAND_CARD_HEIGHT, COLOR_RIM);
+            }
+            graphics.renderOutline(left, top, SEAT_HAND_CARD_WIDTH, SEAT_HAND_CARD_HEIGHT, COLOR_PLAYFIELD_EDGE);
+        }
+
+        int right = centreX + SEAT_HAND_CARD_WIDTH / 2 + (layers - 1) * SEAT_HAND_STACK_OFFSET;
+        int bottom = centreY + SEAT_HAND_CARD_HEIGHT / 2;
+        int left = centreX - SEAT_HAND_CARD_WIDTH / 2;
+        int top = centreY - (layers - 1) * SEAT_HAND_STACK_OFFSET - SEAT_HAND_CARD_HEIGHT / 2;
+        this.drawLabel(graphics, Component.literal(String.valueOf(count)),
+                right + 1, bottom - this.font.lineHeight, COLOR_HOVER);
+
+        if (this.lastMouseX >= left - 1 && this.lastMouseX < right + 1
+                && this.lastMouseY >= top - 1 && this.lastMouseY < bottom + 1)
+        {
+            this.drawCenteredLabel(graphics,
+                    Component.translatable("gui.cardtable.hand_count_tooltip", count),
+                    centreX, top - this.font.lineHeight - 4, COLOR_TEXT_DIM);
+        }
+    }
+
+    /** Public hand size from the section BE; 0 when the seat or level is gone. */
+    private int handCountAt(BlockPos sectionPos)
+    {
+        if (this.minecraft == null || this.minecraft.level == null)
+        {
+            return 0;
+        }
+        return this.minecraft.level.getBlockEntity(sectionPos) instanceof CardTableBlockEntity entity
+                ? entity.getSectionState().getHandCount()
+                : 0;
+    }
+
+    /**
+     * Back texture for the remote hand stack: the active set's default back,
+     * falling through to the core back so a pack without one still shows a
+     * card rather than a grey placeholder.
+     */
+    private ResourceLocation resolveHandBackTexture()
+    {
+        TableGroupService.GroupView group = this.clientGroup();
+        if (group == null || this.minecraft == null || this.minecraft.level == null)
+        {
+            return DEFAULT_BACK;
+        }
+        if (!(this.minecraft.level.getBlockEntity(group.masterPos()) instanceof CardTableBlockEntity master))
+        {
+            return DEFAULT_BACK;
+        }
+        ResourceLocation setId = master.getGroupState().getActiveSetId();
+        CardSetDefinition set = setId != null ? CardRegistry.getSet(setId) : null;
+        if (set != null && set.defaultBackTexture() != null)
+        {
+            return set.defaultBackTexture();
+        }
+        return DEFAULT_BACK;
+    }
+
+    /**
      * One line of screen text, drawn the only way this screen draws text: on a
      * dark backing plate, with shadowing turned off.
      *
      * <p>Both halves are load-bearing. The plate is what makes a label
-     * background-proof — this screen paints text over the wood texture, the
+     * background-proof — this screen paints text over the board texture, the
      * translucent playfield, card backs, seat plates and bare world, and no
      * single text colour reads against all of them. Shadowing is off because
      * vanilla's drop shadow lays a near-black offset copy of every glyph under
@@ -1700,9 +1814,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     /**
      * Bottom-right corner help: always-visible player operations (fixed core
-     * controls plus the active layout's "key → action" lines), with the
-     * development readout stacked above them while F3 is on. Suppressed while
-     * the backpack panel is open so neither block overprints the slot grid.
+     * controls plus the active layout's "key → action" lines). Lines are drawn
+     * bottom-up, so when F3 is on the development readout occupies the lower
+     * stack and operations sit above it. Suppressed while the backpack panel
+     * is open so neither block overprints the slot grid.
      */
     private void renderSideHelp(GuiGraphics graphics, @Nullable TableGroupService.GroupView group)
     {
@@ -2303,8 +2418,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         this.status = Component.translatable("gui.cardtable.leave_sent");
     }
 
-    /** One seat around the table edge; {@code occupantId == null} marks an empty seat. */
-    private record SeatSlot(int index, int x, int y, @Nullable UUID occupantId) {}
+    /**
+     * One seat around the table edge; {@code occupantId == null} marks an empty
+     * seat. {@code sectionPos} is the table block this seat stands for, used to
+     * read the public hand count from its section state.
+     */
+    private record SeatSlot(int index, int x, int y, BlockPos sectionPos,
+                            @Nullable UUID occupantId) {}
 
     /** One playfield cell mapped from a table block. */
     private record Cell(BlockPos position, int x, int y, int width, int height) {}

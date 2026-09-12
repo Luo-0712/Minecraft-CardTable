@@ -21,7 +21,7 @@ public final class HandStripLayout
     public static final int CARD_WIDTH = 30;
     /** Card sprite height in GUI pixels. */
     public static final int CARD_HEIGHT = 42;
-    /** Comfortable step between neighbouring cards: one third of the card is left showing. */
+    /** Comfortable step between neighbouring cards: two thirds of the card is left showing. */
     public static final int FULL_PITCH = 20;
     /** Tightest step that still leaves a readable colour/pattern sliver. */
     public static final int MIN_PITCH = 8;
