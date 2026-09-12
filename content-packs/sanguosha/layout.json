@@ -52,6 +52,15 @@
       }
     },
     {
+      "id": "reset",
+      "type": "reset",
+      "source": "deck",
+      "key": "key.keyboard.c",
+      "label": {
+        "text": "收牌"
+      }
+    },
+    {
       "id": "flip",
       "type": "flip",
       "key": "key.keyboard.f",

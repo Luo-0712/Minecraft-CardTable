@@ -14,15 +14,14 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -96,7 +95,7 @@ public final class DeckService
             return false;
         }
 
-        if (!loadDeck(groupState, deckId.get(), normalizedLayout))
+        if (!loadDeck(groupState, deckId.get(), normalizedLayout, level.getRandom()))
         {
             return false;
         }
@@ -110,14 +109,22 @@ public final class DeckService
      * Pure core of the deck insert, shared with the feasibility test: binds
      * the set/layout, instantiates one group-level container for every
      * declared zone per the structural conventions and loads the whole deck
-     * face-down into the layout's stock pile (set order; the pile top is the
-     * last entry).
+     * face-down into the layout's stock pile (set order, then shuffled when a
+     * random source is given; the pile top is the last entry).
      *
+     * @param random when non-null, the stock pile is shuffled after loading so
+     *               a freshly inserted deck is already randomized
      * @return {@code false} when the layout names no stock pile or the state
      *         diverges from the layout (nothing is mutated then)
      */
     static boolean loadDeck(TableGroupState groupState, ResourceLocation deckId,
                             TableLayoutDefinition normalizedLayout)
+    {
+        return loadDeck(groupState, deckId, normalizedLayout, null);
+    }
+
+    static boolean loadDeck(TableGroupState groupState, ResourceLocation deckId,
+                            TableLayoutDefinition normalizedLayout, @Nullable RandomSource random)
     {
         ZoneDefinition stock = normalizedLayout.initialZoneFor(deckId);
         if (stock == null)
@@ -134,6 +141,10 @@ public final class DeckService
         for (CardDefinition definition : CardRegistry.cardsInSet(deckId))
         {
             container.addToStackTop(new CardInstance(definition.id()));
+        }
+        if (random != null)
+        {
+            container.shuffle(random);
         }
         return true;
     }

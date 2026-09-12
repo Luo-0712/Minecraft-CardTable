@@ -51,7 +51,7 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
          * Runs one action of the active layout's action table through its
          * generic primitive. {@code instanceId} is only used by the
          * card-targeted primitives (FLIP/ROTATE) and must be {@code null}
-         * for pile-targeted ones (DRAW/SHUFFLE).
+         * for pile-targeted ones (DRAW/SHUFFLE/RESET).
          */
         record Perform(ResourceLocation actionId, @Nullable UUID instanceId) implements Action
         {

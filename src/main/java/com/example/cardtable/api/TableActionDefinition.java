@@ -12,7 +12,9 @@ import java.util.Objects;
  * actor's hand, shuffle a stack, flip/rotate the hovered card — and executes
  * them server-side; it never interprets what an action means for any game's
  * rules. "Draw" is literally "take {@code amount} cards from stack
- * {@code sourceZone} into the hand", nothing more.
+ * {@code sourceZone} into the hand", nothing more. "Reset" is literally
+ * "gather every card of the active set back into {@code sourceZone} in set
+ * order", nothing more.
  */
 public final class TableActionDefinition
 {
@@ -23,6 +25,12 @@ public final class TableActionDefinition
         DRAW,
         /** Randomize the order of {@code sourceZone} server-side. */
         SHUFFLE,
+        /**
+         * Collect every card of the active set from the whole table (surface,
+         * declared zones, hands) back into {@code sourceZone} as the stock
+         * pile: set order, face-down, unrotated.
+         */
+        RESET,
         /** Flip the card under the cursor. */
         FLIP,
         /** Rotate the card under the cursor. */
@@ -69,7 +77,7 @@ public final class TableActionDefinition
         return this.type;
     }
 
-    /** The STACK zone DRAW takes from / SHUFFLE randomizes; required for both. */
+    /** The STACK zone DRAW takes from / SHUFFLE randomizes / RESET fills; required for all three. */
     @Nullable
     public ResourceLocation sourceZone()
     {
@@ -141,7 +149,7 @@ public final class TableActionDefinition
             return this;
         }
 
-        /** The pile DRAW takes from / SHUFFLE randomizes; both types require it. */
+        /** The pile DRAW takes from / SHUFFLE randomizes / RESET fills; those types require it. */
         public Builder sourceZone(@Nullable ResourceLocation sourceZone)
         {
             this.sourceZone = sourceZone;
@@ -185,7 +193,8 @@ public final class TableActionDefinition
             {
                 throw new IllegalStateException("Action " + this.id + " has a non-positive amount");
             }
-            if ((this.type == Type.DRAW || this.type == Type.SHUFFLE) && this.sourceZone == null)
+            if ((this.type == Type.DRAW || this.type == Type.SHUFFLE || this.type == Type.RESET)
+                    && this.sourceZone == null)
             {
                 throw new IllegalStateException("Action " + this.id + " of type " + this.type
                         + " requires a source zone");

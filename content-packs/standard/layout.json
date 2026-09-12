@@ -32,6 +32,13 @@
       "label": { "translate": "action.cardtable.standard.shuffle" }
     },
     {
+      "id": "reset",
+      "type": "reset",
+      "source": "deck",
+      "key": "key.keyboard.c",
+      "label": { "translate": "action.cardtable.standard.reset" }
+    },
+    {
       "id": "flip",
       "type": "flip",
       "key": "key.keyboard.f",

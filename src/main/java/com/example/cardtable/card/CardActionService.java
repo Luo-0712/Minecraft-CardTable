@@ -1,12 +1,15 @@
 package com.example.cardtable.card;
 
+import com.example.cardtable.api.CardDefinition;
 import com.example.cardtable.api.CardRegistry;
 import com.example.cardtable.api.TableActionDefinition;
 import com.example.cardtable.api.TableLayoutDefinition;
 import com.example.cardtable.api.ZoneDefinition;
 import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.menu.CardTableMenu;
+import com.example.cardtable.network.NetworkHandler;
 import com.example.cardtable.network.packet.CardActionPacket;
+import com.example.cardtable.network.packet.TableNoticePacket;
 import com.example.cardtable.table.TableGroupService;
 import com.example.cardtable.table.TableGroupState;
 import com.example.cardtable.table.TableSectionState;
@@ -18,8 +21,10 @@ import net.minecraft.world.level.Level;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -32,7 +37,8 @@ import java.util.UUID;
  * {@code hand} keep their dedicated containers, everything else must be
  * declared by the active layout, and the {@code Perform} action runs one
  * entry of the layout's action table through a generic primitive (draw N
- * from a stack, shuffle a stack, flip/rotate a card). Ownership rules keep
+ * from a stack, shuffle a stack, reset a set back into its stock pile,
+ * flip/rotate a card). Ownership rules keep
  * the sandbox honest: every declared zone is a group-level instance operable
  * by any seated player, the blank surface is shared table space, and a hand
  * belongs to its occupant only (the {@code cardtable:hand} target is always
@@ -81,6 +87,52 @@ public final class CardActionService
             }
             TableGroupService.syncGroup(level, group);
             HandSyncService.pushAll(level, group);
+            announceIfShuffle(level, group, actor, packet);
+        }
+    }
+
+    /**
+     * After a successful declared-action shuffle, every seated player of the
+     * group gets a short in-table toast naming the actor (and the pile label
+     * when the layout declares one). Purely informational — it never mutates
+     * state and never leaves the table screen path.
+     */
+    private static void announceIfShuffle(Level level, TableGroupService.GroupView group,
+                                          ServerPlayer actor, CardActionPacket packet)
+    {
+        if (!(packet.action() instanceof CardActionPacket.Action.Perform perform))
+        {
+            return;
+        }
+        TableGroupState groupState = groupState(level, group);
+        TableLayoutDefinition layout = groupState == null ? null : resolveLayout(groupState);
+        TableActionDefinition action = layout == null ? null : actionById(layout, perform.actionId());
+        if (action == null || action.type() != TableActionDefinition.Type.SHUFFLE)
+        {
+            return;
+        }
+        String zoneLabel = "";
+        ZoneDefinition zone = layout.zone(action.sourceZone());
+        if (zone != null && zone.label() != null)
+        {
+            zoneLabel = zone.label().getString();
+        }
+        TableNoticePacket notice = new TableNoticePacket(packet.tablePosition(),
+                actor.getGameProfile().getName(), zoneLabel);
+        for (TableSectionState section : collectSections(level, group))
+        {
+            UUID occupantId = section.getOccupantId();
+            if (occupantId == null)
+            {
+                continue;
+            }
+            ServerPlayer seated = level.getServer().getPlayerList().getPlayer(occupantId);
+            if (seated != null)
+            {
+                NetworkHandler.CHANNEL.send(
+                        net.minecraftforge.network.PacketDistributor.PLAYER.with(() -> seated),
+                        notice);
+            }
         }
     }
 
@@ -282,7 +334,7 @@ public final class CardActionService
 
     /**
      * Runs one action of the active layout's action table through its generic
-     * primitive. The action id must exist in the table and a DRAW/SHUFFLE
+     * primitive. The action id must exist in the table and a DRAW/SHUFFLE/RESET
      * source must be a declared STACK zone; everything else is rejected
      * without touching state (and without bumping the version).
      */
@@ -371,12 +423,22 @@ public final class CardActionService
                 {
                     return false;
                 }
-                List<CardInstance> cards = pile.stackCards();
-                for (int index = cards.size() - 1; index > 0; index--)
-                {
-                    Collections.swap(cards, index, random.nextInt(index + 1));
-                }
+                pile.shuffle(random);
                 return true;
+            }
+            case RESET ->
+            {
+                // RESET primitive: gather every card of the active set from
+                // the whole table back into the source stock pile in set
+                // order, face-down and unrotated — the same configuration a
+                // freshly inserted deck starts from (minus the insert shuffle).
+                ZoneState stock = stackContainer(layout, groupState, action.sourceZone());
+                ResourceLocation setId = groupState.getActiveSetId();
+                if (stock == null || setId == null)
+                {
+                    return false;
+                }
+                return collectIntoStock(groupState, sections, setId, stock);
             }
             case FLIP ->
             {
@@ -422,6 +484,59 @@ public final class CardActionService
             return null; // only declared piles can be drawn from or shuffled
         }
         return groupState.getSharedZones().get(zoneId);
+    }
+
+    /**
+     * Takes every card of {@code setId} from the surface, every declared zone
+     * and every hand, then pushes them onto {@code stock} in set definition
+     * order (face-down, rotation 0). Returns whether anything was moved.
+     */
+    private static boolean collectIntoStock(TableGroupState groupState, List<TableSectionState> sections,
+                                            ResourceLocation setId, ZoneState stock)
+    {
+        List<CardInstance> gathered = new ArrayList<>();
+        gathered.addAll(stock.takeIfDefinition(cardId -> isCardOfSet(cardId, setId)));
+        for (ZoneState zone : groupState.getSharedZones().values())
+        {
+            gathered.addAll(zone.takeIfDefinition(cardId -> isCardOfSet(cardId, setId)));
+        }
+        gathered.addAll(groupState.getSurface().takeIfDefinition(cardId -> isCardOfSet(cardId, setId)));
+        for (TableSectionState section : sections)
+        {
+            List<CardInstance> hand = section.getHand();
+            List<CardInstance> fromHand = hand.stream()
+                    .filter(card -> isCardOfSet(card.definitionId(), setId))
+                    .toList();
+            hand.removeAll(fromHand);
+            gathered.addAll(fromHand);
+        }
+        if (gathered.isEmpty())
+        {
+            return false;
+        }
+
+        // Multiple physical copies of one definition share a slot in the set
+        // order; stable-sorting by sortIndex keeps that order deterministic.
+        Map<ResourceLocation, Integer> order = new HashMap<>();
+        int rank = 0;
+        for (CardDefinition definition : CardRegistry.cardsInSet(setId))
+        {
+            order.put(definition.id(), rank++);
+        }
+        gathered.sort(Comparator.comparingInt(card -> order.getOrDefault(card.definitionId(), Integer.MAX_VALUE)));
+        for (CardInstance card : gathered)
+        {
+            card.setFaceUp(false);
+            card.setRotation(0);
+            stock.addToStackTop(card);
+        }
+        return true;
+    }
+
+    private static boolean isCardOfSet(ResourceLocation cardId, ResourceLocation setId)
+    {
+        CardDefinition definition = CardRegistry.get(cardId);
+        return definition != null && setId.equals(definition.cardSet());
     }
 
     // Locating ---------------------------------------------------------------

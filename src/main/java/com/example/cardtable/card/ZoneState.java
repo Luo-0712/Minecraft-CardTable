@@ -5,13 +5,16 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.RandomSource;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 /**
  * Generic state container for a layout-declared zone instance or for the
@@ -146,6 +149,41 @@ public final class ZoneState
     public CardInstance takeFromStackTop()
     {
         return this.stack.isEmpty() ? null : this.stack.remove(this.stack.size() - 1);
+    }
+
+    /** Fisher–Yates over the stack in place; a no-op on empty piles. */
+    public void shuffle(RandomSource random)
+    {
+        for (int index = this.stack.size() - 1; index > 0; index--)
+        {
+            Collections.swap(this.stack, index, random.nextInt(index + 1));
+        }
+    }
+
+    /**
+     * Removes and returns every card (stack or placed) whose definition id
+     * matches {@code wanted}. Used by deck reclaim and the reset primitive.
+     */
+    public List<CardInstance> takeIfDefinition(Predicate<ResourceLocation> wanted)
+    {
+        List<CardInstance> taken = new ArrayList<>();
+        this.stack.removeIf(card -> {
+            if (wanted.test(card.definitionId()))
+            {
+                taken.add(card);
+                return true;
+            }
+            return false;
+        });
+        this.placed.removeIf(entry -> {
+            if (wanted.test(entry.card().definitionId()))
+            {
+                taken.add(entry.card());
+                return true;
+            }
+            return false;
+        });
+        return taken;
     }
 
     // PLACED storage ----------------------------------------------------------

@@ -86,14 +86,16 @@ public class DeckItem extends Item
         });
     }
 
-    /** The deck's display name from its set definition; falls back to a generic name. */
+    /**
+     * Shows as {@code <set> 牌组} so creative search matches either the set
+     * name (标准扑克 / 三国杀) or the generic term 牌组 / deck.
+     */
     @Override
     public Component getName(ItemStack stack)
     {
         return deckId(stack)
-                .map(CardRegistry::getSet)
-                .map(CardSetDefinition::displayName)
-                .map(Component::copy)
+                .flatMap(CardRegistry::findSet)
+                .map(set -> Component.translatable("item.cardtable.deck_named", set.displayName()))
                 .orElseGet(() -> Component.translatable("item.cardtable.deck"));
     }
 

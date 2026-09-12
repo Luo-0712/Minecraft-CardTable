@@ -11,6 +11,7 @@ import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.card.CardInstance;
 import com.example.cardtable.card.ZoneState;
 import com.example.cardtable.client.ClientHandStore;
+import com.example.cardtable.client.ClientTableNotices;
 import com.example.cardtable.client.ModKeyBindings;
 import com.example.cardtable.client.card.CardTextureResolver;
 import com.example.cardtable.menu.CardTableMenu;
@@ -51,8 +52,8 @@ import java.util.UUID;
  * Fullscreen top-down view of the table surface. Right-clicking the block
  * seats the player at that specific table and opens this view: the playfield
  * fills the whole screen, one seat per table block rings the edge with each
- * seated player's portrait and name, and development debug info stays in the
- * bottom-right corner (F3 toggles it while the view is open).
+ * seated player's portrait and name, and player operations stay in the
+ * bottom-right corner (F3 also stacks the development readout there).
  *
  * <p>The table itself is one blank, shared surface: a single group-level
  * free placement area covering the whole playfield, with no per-seat cells
@@ -140,9 +141,6 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int LABEL_PAD_Y = 1;
     /** Side gaps around the board so the surrounding world stays visible on the left/right, like a container menu. */
     private static final int SIDE_MARGIN = 18;
-    /** Playfield inset from the screen edges, clamped down for small windows. */
-    private static final int PLAYFIELD_INSET_X = 140;
-    private static final int PLAYFIELD_INSET_Y = 96;
 
     // Card rendering: surface cards are bigger than hand cards; both keep the
     // same 34:48 (roughly poker) aspect ratio.
@@ -157,7 +155,6 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     // Palette derived from the table texture: warm wood, cream accents.
     private static final int COLOR_WOOD_DARK = 0xFF5A3D26;
-    private static final int COLOR_PLAYFIELD = 0x66EDE7D9;
     private static final int COLOR_PLAYFIELD_EDGE = 0xFF6B4A2F;
     private static final int COLOR_SEAT = 0xFF6B4A2F;
     private static final int COLOR_SEAT_EMPTY = 0x904A3624;
@@ -171,7 +168,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
      * the background.
      */
     private static final int COLOR_ERROR = 0xFFFF8A73;
-    private static final int COLOR_CARD_BORDER = 0xFF2E2620;
+    /** Soft amber for shared table events (shuffle toast). */
+    private static final int COLOR_NOTICE = 0xFFFFE08A;
     private static final int COLOR_CARD_MISSING = 0xFF555555;
     private static final int COLOR_PANEL = 0x90241C14;
     private static final int COLOR_PANEL_EDGE = 0xFF6B4A2F;
@@ -258,6 +256,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         this.leftPos = 0;
         this.topPos = 0;
         this.layoutSlots();
+    }
+
+    @Override
+    public void removed()
+    {
+        super.removed();
+        ClientTableNotices.clear();
     }
 
     // Slot positions are irrelevant server-side; only the client lays them
@@ -458,33 +463,29 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     private int playfieldLeft()
     {
-        int insetX = Math.min(PLAYFIELD_INSET_X, this.width / 6);
-        return SIDE_MARGIN + insetX;
+        return this.leftPos + SIDE_MARGIN;
     }
 
     private int playfieldTop()
     {
-        return Math.min(PLAYFIELD_INSET_Y, this.height / 5);
+        return this.topPos;
     }
 
     private int playfieldWidth()
     {
-        int insetX = Math.min(PLAYFIELD_INSET_X, this.width / 6);
-        return this.width - insetX * 2 - SIDE_MARGIN * 2;
+        return this.width - SIDE_MARGIN * 2;
     }
 
     /**
-     * Bottom edge of the playfield: the symmetric vertical inset, stretched by
-     * the reserved bottom band ({@link #BOTTOM_BAND_HEIGHT}) when that band is
-     * the larger of the two. On tall windows the plain inset already leaves
-     * more room than the band needs; on short ones the band wins, and the
-     * board gives up the space rather than let the hand strip sit on it.
+     * Bottom edge of the playfield: the board runs to the screen edge, but
+     * the reserved bottom band ({@link #BOTTOM_BAND_HEIGHT}) is still left
+     * free so the hand strip and own seat plate sit in front of the player
+     * rather than on top of the cards.
      */
     private int playfieldBottom()
     {
-        int insetY = Math.min(PLAYFIELD_INSET_Y, this.height / 5);
         int band = Math.min(BOTTOM_BAND_HEIGHT, this.height / 4);
-        return this.height - Math.max(insetY, band);
+        return this.height - band;
     }
 
     private int playfieldHeight()
@@ -538,15 +539,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 0.0F, 0.0F, 16, 16, 16, 16);
         graphics.renderOutline(boardLeft, boardTop, boardWidth, boardHeight, COLOR_WOOD_DARK);
 
-        // Reserved play area in the centre with one cell per table block. It
-        // ends above the bottom band so the hand strip and the own seat plate
-        // never print over the board.
-        int playLeft = playfieldLeft();
-        int playTop = playfieldTop();
-        int playWidth = playfieldWidth();
-        int playHeight = playfieldHeight();
-        graphics.fill(playLeft, playTop, playLeft + playWidth, playTop + playHeight, COLOR_PLAYFIELD);
-        graphics.renderOutline(playLeft, playTop, playWidth, playHeight, COLOR_PLAYFIELD_EDGE);
+        // The play area is the full board (no inset, no rim line): one blank
+        // surface covering the table. It still stops above the bottom band so
+        // the hand strip and the own seat plate never print over the cards.
+        // No fill or outline here — the board texture is the desk itself.
 
         // The backpack is deliberately not painted here: it belongs to the
         // frame's topmost layer (renderInventoryOverlay), above every card.
@@ -1128,15 +1124,36 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         // instead (the strip then wins the overlap it cannot avoid).
         int stripTop = Math.max(playfieldBottom() + 2,
                 this.height - HAND_CARD_HEIGHT - HAND_BOTTOM_MARGIN);
+        // Interaction band stays the full viewport (scroll / drop priority);
+        // the painted plate below only covers the fan itself.
         this.handStripRect = new Rect(viewportLeft, stripTop - 4,
                 viewportWidth, HAND_CARD_HEIGHT + 8);
 
-        graphics.fill(this.handStripRect.x(), this.handStripRect.y(),
-                this.handStripRect.x() + this.handStripRect.width(),
-                this.handStripRect.y() + this.handStripRect.height(), COLOR_PANEL);
+        // Plate hugs the cards: a short hand gets a short plate, never a
+        // full-width bar. Overflow hands still fill the viewport because the
+        // cards do — edge fades sit on the plate, not on bare table.
+        int platePad = 2;
+        int plateLeft;
+        int plateRight;
+        if (overflow)
+        {
+            plateLeft = viewportLeft;
+            plateRight = viewportLeft + viewportWidth;
+        }
+        else
+        {
+            plateLeft = Math.max(viewportLeft, contentOriginX - this.handScrollOffset - platePad);
+            plateRight = Math.min(viewportLeft + viewportWidth,
+                    contentOriginX - this.handScrollOffset + contentWidth + platePad);
+        }
+        if (plateRight > plateLeft)
+        {
+            graphics.fill(plateLeft, stripTop - 4, plateRight,
+                    stripTop + HAND_CARD_HEIGHT + 4, COLOR_PANEL);
+        }
 
         // Clip so partial cards at a scrolled edge never paint outside the
-        // viewport; the full-width panel plate behind them stays unclipped.
+        // viewport; the unclipped plate behind them hugs the fan.
         graphics.enableScissor(viewportLeft, stripTop,
                 viewportLeft + viewportWidth, stripTop + HAND_CARD_HEIGHT);
         Component hoveredName = null;
@@ -1169,8 +1186,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
         if (hoveredName != null)
         {
-            this.drawCenteredLabel(graphics,
-                    Component.translatable("gui.cardtable.hand_hint", hoveredName),
+            this.drawCenteredLabel(graphics, hoveredName,
                     this.width / 2, stripTop - 12, COLOR_HOVER);
         }
     }
@@ -1302,7 +1318,6 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                     0.0F, 0.0F, binding.width(), binding.height(), binding.width(), binding.height());
         }
         pose.popPose();
-        graphics.renderOutline(x, y, width, height, COLOR_CARD_BORDER);
         if (hovered)
         {
             graphics.renderOutline(x - 1, y - 1, width + 2, height + 2, COLOR_HOVER);
@@ -1337,7 +1352,6 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private void drawPlaceholder(GuiGraphics graphics, int x, int y, int width, int height)
     {
         graphics.fill(x, y, x + width, y + height, COLOR_CARD_MISSING);
-        graphics.renderOutline(x, y, width, height, COLOR_CARD_BORDER);
         String glyph = "?";
         graphics.drawString(this.font, glyph, x + (width - this.font.width(glyph)) / 2,
                 y + height / 2 - 4, COLOR_HOVER, false);
@@ -1384,8 +1398,9 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
         this.renderSeats(graphics, mouseX, mouseY);
         this.renderHand(graphics, mouseX, mouseY);
+        this.renderNotice(graphics);
         this.renderStatus(graphics);
-        this.renderDebug(graphics, group);
+        this.renderSideHelp(graphics, group);
 
         // The held card follows the mouse; the server's authoritative reply
         // will discard this preview on the next sync. It is drawn before the
@@ -1402,8 +1417,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             int previewRotation = this.drag.fromHand() ? 0
                     : this.view != null
                     ? this.view.displayRotationDeg(this.drag.card().rotation()) : this.drag.card().rotation();
+            // Stick to the cursor at the grab point (offset from the card
+            // centre), so picking up near an edge does not yank the card
+            // centre under the mouse and releasing does not re-centre it.
+            int drawX = (int) Math.round(mouseX - this.drag.grabOffsetX()) - CARD_WIDTH / 2;
+            int drawY = (int) Math.round(mouseY - this.drag.grabOffsetY()) - CARD_HEIGHT / 2;
             this.drawCard(graphics, this.drag.card(), this.drag.fromHand() || this.drag.card().isFaceUp(),
-                    mouseX - CARD_WIDTH / 2, mouseY - CARD_HEIGHT / 2, CARD_WIDTH, CARD_HEIGHT, true,
+                    drawX, drawY, CARD_WIDTH, CARD_HEIGHT, true,
                     previewRotation);
         }
 
@@ -1563,6 +1583,34 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 id -> this.minecraft.level.getPlayerByUUID(id));
     }
 
+    /**
+     * Shared table toast (shuffle): sits one line above the hand strip so it
+     * does not fight the hand hint or the error status, and only appears while
+     * this screen still points at the table the event came from.
+     */
+    private void renderNotice(GuiGraphics graphics)
+    {
+        Component notice = ClientTableNotices.activeNotice(this.menu.getTablePosition());
+        if (notice.getString().isEmpty())
+        {
+            return;
+        }
+        int noticeY;
+        if (this.showInventory)
+        {
+            noticeY = Math.max(2, this.inventoryPanelTop - INVENTORY_CAP_HEIGHT - 26);
+        }
+        else if (this.handStripRect != null)
+        {
+            noticeY = Math.max(2, this.handStripRect.y() - 26);
+        }
+        else
+        {
+            noticeY = this.height - 46;
+        }
+        this.drawCenteredLabel(graphics, notice, this.width / 2, noticeY, COLOR_NOTICE);
+    }
+
     private void renderStatus(GuiGraphics graphics)
     {
         Component message = this.status;
@@ -1603,33 +1651,34 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
     }
 
-    // Development debug info lives in the bottom-right corner, toggled with F3.
-    private void renderDebug(GuiGraphics graphics, @Nullable TableGroupService.GroupView group)
+    /**
+     * Bottom-right corner help: always-visible player operations (fixed core
+     * controls plus the active layout's "key → action" lines), with the
+     * development readout stacked above them while F3 is on. Suppressed while
+     * the backpack panel is open so neither block overprints the slot grid.
+     */
+    private void renderSideHelp(GuiGraphics graphics, @Nullable TableGroupService.GroupView group)
     {
-        // Suppressed while the backpack panel is open: the readout lives in the
-        // bottom-right corner and would overprint the panel's slot grid.
-        if (!this.showDebugInfo || this.showInventory
-                || group == null || this.minecraft == null || this.minecraft.level == null)
+        if (this.showInventory || this.minecraft == null || this.minecraft.level == null)
         {
             return;
         }
-        BlockEntity master = this.minecraft.level.getBlockEntity(group.masterPos());
-        if (!(master instanceof CardTableBlockEntity masterEntity))
+        TableGroupState helpState = null;
+        if (group != null)
         {
-            return;
+            BlockEntity master = this.minecraft.level.getBlockEntity(group.masterPos());
+            if (master instanceof CardTableBlockEntity masterEntity)
+            {
+                helpState = masterEntity.getGroupState();
+            }
         }
-        TableGroupState debugState = masterEntity.getGroupState();
-        List<Component> lines = new ArrayList<>(List.of(
-                Component.translatable("gui.cardtable.members",
-                        this.menu.getSeatedCount(), this.menu.getSeatCount()),
-                Component.translatable("gui.cardtable.version", debugState.getVersion()),
-                Component.translatable("gui.cardtable.table_id",
-                        debugState.getTableId().toString().substring(0, 8)),
-                Component.translatable("gui.cardtable.active_set",
-                        debugState.getActiveSetId() != null ? debugState.getActiveSetId().toString() : "-"),
-                Component.translatable("gui.cardtable.active_layout",
-                        debugState.getActiveLayoutId() != null ? debugState.getActiveLayoutId().toString() : "-")));
-        appendLayoutDebug(lines, debugState);
+
+        List<Component> lines = new ArrayList<>();
+        if (this.showDebugInfo && helpState != null)
+        {
+            appendDebugReadout(lines, helpState);
+        }
+        appendOperations(lines, helpState);
         int y = this.height - 12;
         for (Component line : lines)
         {
@@ -1638,11 +1687,23 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
     }
 
-    // Zone counts plus "key → action" hints, purely informational: the debug
-    // readout follows whatever the pack declared instead of the old fixed
-    // draw/discard counters. Resolves the layout locally so the render flag
-    // (owned by renderZones) is untouched.
-    private void appendLayoutDebug(List<Component> lines, TableGroupState debugState)
+    // Development state: membership, identity and zone tallies. Action keys
+    // live in the operations block so they stay visible even with F3 off.
+    private void appendDebugReadout(List<Component> lines, TableGroupState debugState)
+    {
+        lines.add(Component.translatable("gui.cardtable.members",
+                this.menu.getSeatedCount(), this.menu.getSeatCount()));
+        lines.add(Component.translatable("gui.cardtable.version", debugState.getVersion()));
+        lines.add(Component.translatable("gui.cardtable.table_id",
+                debugState.getTableId().toString().substring(0, 8)));
+        lines.add(Component.translatable("gui.cardtable.active_set",
+                debugState.getActiveSetId() != null ? debugState.getActiveSetId().toString() : "-"));
+        lines.add(Component.translatable("gui.cardtable.active_layout",
+                debugState.getActiveLayoutId() != null ? debugState.getActiveLayoutId().toString() : "-"));
+        appendZoneCounts(lines, debugState);
+    }
+
+    private void appendZoneCounts(List<Component> lines, TableGroupState debugState)
     {
         ResourceLocation layoutId = debugState.getActiveLayoutId();
         TableLayoutDefinition layout = layoutId == null ? null : CardRegistry.getLayout(layoutId);
@@ -1650,8 +1711,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return;
         }
-        TableLayoutDefinition normalized = layout.normalized();
-        for (ZoneDefinition zone : normalized.zones())
+        for (ZoneDefinition zone : layout.normalized().zones())
         {
             if (TableLayoutDefinition.ZONE_HAND.equals(zone.id()))
             {
@@ -1660,7 +1720,32 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             ZoneState state = debugState.getSharedZones().get(zone.id());
             lines.add(Component.literal(zoneDisplayName(zone) + ": " + (state == null ? 0 : state.size())));
         }
-        for (TableActionDefinition action : normalized.actions())
+    }
+
+    /**
+     * Player-facing controls that match the current screen behaviour. Fixed
+     * mouse/backpack rules first, then whatever keys the active pack declared
+     * for draw/shuffle/reset/flip/rotate and friends.
+     */
+    private void appendOperations(List<Component> lines, @Nullable TableGroupState debugState)
+    {
+        Component backpackKey = ModKeyBindings.TOGGLE_INVENTORY.getKey().getDisplayName();
+        lines.add(Component.translatable("gui.cardtable.ops_drag"));
+        lines.add(Component.translatable("gui.cardtable.ops_shift_drop"));
+        lines.add(Component.translatable("gui.cardtable.ops_seat"));
+        lines.add(Component.translatable("gui.cardtable.ops_hand"));
+        lines.add(Component.translatable("gui.cardtable.ops_backpack", backpackKey));
+        if (debugState == null)
+        {
+            return;
+        }
+        ResourceLocation layoutId = debugState.getActiveLayoutId();
+        TableLayoutDefinition layout = layoutId == null ? null : CardRegistry.getLayout(layoutId);
+        if (layout == null)
+        {
+            return;
+        }
+        for (TableActionDefinition action : layout.normalized().actions())
         {
             if (action.key() != null)
             {
@@ -1690,6 +1775,20 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     @Nullable
     private CardInstance hoveredCard(double mouseX, double mouseY)
     {
+        RenderedCard hovered = hoveredCardAt(mouseX, mouseY);
+        return hovered != null ? hovered.card() : null;
+    }
+
+    /**
+     * The card <em>and its on-screen rect</em> under the mouse, if any.
+     * Same resolution order as {@link #hoveredCard}: topmost table card first,
+     * then the own hand strip. The rect is what a drag uses to compute the
+     * grab offset, so the card sticks to the cursor at the point it was
+     * picked up rather than jumping centre-to-cursor.
+     */
+    @Nullable
+    private RenderedCard hoveredCardAt(double mouseX, double mouseY)
+    {
         for (int index = this.renderedCards.size() - 1; index >= 0; index--)
         {
             RenderedCard rendered = this.renderedCards.get(index);
@@ -1699,7 +1798,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             }
             if (hitTest(mouseX, mouseY, rendered.x(), rendered.y(), rendered.width(), rendered.height()))
             {
-                return rendered.card();
+                return rendered;
             }
         }
 
@@ -1709,7 +1808,18 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             int index = this.handCardIndexAt(mouseX, mouseY, hand.size());
             if (index >= 0 && index < hand.size())
             {
-                return hand.get(index);
+                int viewportLeft = HandStripLayout.VIEWPORT_PAD_X;
+                int viewportWidth = HandStripLayout.viewportWidth(this.width);
+                int pitch = HandStripLayout.pitch(hand.size(), viewportWidth);
+                int contentWidth = HandStripLayout.contentWidth(hand.size(), pitch);
+                boolean overflow = HandStripLayout.isOverflow(contentWidth, viewportWidth);
+                int contentOriginX = overflow
+                        ? viewportLeft
+                        : viewportLeft + Math.max(0, (viewportWidth - contentWidth) / 2);
+                int cardX = contentOriginX + index * pitch - this.handScrollOffset;
+                int stripTop = this.handStripRect.y() + 4;
+                return new RenderedCard(hand.get(index), cardX, stripTop,
+                        HAND_CARD_WIDTH, HAND_CARD_HEIGHT);
             }
         }
         return null;
@@ -1829,9 +1939,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         // Placed zones take the drop point in table space: the screen point
         // is mapped back through the view's inverse transform, so every
         // client reports the same group-level coordinates no matter how its
-        // view is rotated.
+        // view is rotated. The point is the card's visual centre under the
+        // cursor (grab offset applied), not the raw mouse — matching the
+        // preview so release never nudges the card.
+        double centreX = mouseX - this.drag.grabOffsetX();
+        double centreY = mouseY - this.drag.grabOffsetY();
         double[] tablePoint = this.view != null
-                ? this.view.screenToTable(mouseX, mouseY) : new double[] {mouseX, mouseY};
+                ? this.view.screenToTable(centreX, centreY) : new double[] {centreX, centreY};
         float x = normalizeDrop(tablePoint[0], target.tableRect().x(), target.tableRect().width());
         float y = normalizeDrop(tablePoint[1], target.tableRect().y(), target.tableRect().height());
         if (target.zone() != null && target.zone().kind() == ZoneDefinition.Kind.GRID)
@@ -1885,10 +1999,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     /**
      * Table-space pixel → zone-local normalized coordinate for the dropped
-     * card's <em>center</em>: the mouse point becomes the card center, so the
-     * card lands exactly where the player pointed. Inverse of the render-side
-     * mapping, with no card-size inset — 0 = the zone's left/top edge and
-     * 1 = its right/bottom edge.
+     * card's <em>centre</em>: the caller passes the visual centre under the
+     * cursor (grab offset already applied), so the card lands exactly where
+     * the drag preview painted it. Inverse of the render-side mapping, with
+     * no card-size inset — 0 = the zone's left/top edge and 1 = its
+     * right/bottom edge.
      */
     private static float normalizeDrop(double value, int zoneStart, int zoneSize)
     {
@@ -1989,10 +2104,16 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                 this.toggleInventory();
                 return true;
             }
-            CardInstance hovered = hoveredCard(mouseX, mouseY);
+            RenderedCard hovered = hoveredCardAt(mouseX, mouseY);
             if (hovered != null)
             {
-                this.drag = new Drag(hovered, isOwnHandCard(hovered));
+                // Keep the grab point relative to the card's centre so the
+                // card neither jumps under the cursor on pickup nor re-centres
+                // on release — the drop lands where the preview was painted.
+                double centerX = hovered.x() + hovered.width() / 2.0D;
+                double centerY = hovered.y() + hovered.height() / 2.0D;
+                this.drag = new Drag(hovered.card(), isOwnHandCard(hovered.card()),
+                        mouseX - centerX, mouseY - centerY);
                 return true;
             }
             if (!this.seats.isEmpty())
@@ -2100,8 +2221,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
      * @param fromHand whether it was picked up from the local player's own
      *                 hand, which is the only case where the preview may show
      *                 the face of a card the server still counts as face-down.
+     * @param grabOffsetX mouse-x minus the card's visual centre at grab time;
+     *                    preserved for the whole drag so the card does not
+     *                    jump when picked up off-centre, and the drop lands
+     *                    exactly where the preview painted it.
+     * @param grabOffsetY same as {@code grabOffsetX} on the y axis.
      */
-    private record Drag(CardInstance card, boolean fromHand)
+    private record Drag(CardInstance card, boolean fromHand, double grabOffsetX, double grabOffsetY)
     {
         UUID instanceId()
         {

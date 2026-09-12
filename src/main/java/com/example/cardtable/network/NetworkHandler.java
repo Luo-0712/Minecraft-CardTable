@@ -6,6 +6,7 @@ import com.example.cardtable.network.packet.CardTableMembershipPacket;
 import com.example.cardtable.network.packet.ContentPackListPacket;
 import com.example.cardtable.network.packet.ContentPackRequestPacket;
 import com.example.cardtable.network.packet.HandSyncPacket;
+import com.example.cardtable.network.packet.TableNoticePacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
@@ -20,7 +21,8 @@ public final class NetworkHandler
     //      resolved to the sender's own seat server-side.
     // "6": Move carries playRotation so a card leaving hand lands upright
     //      on the actor's rotated view.
-    private static final String PROTOCOL_VERSION = "6";
+    // "7": TableNoticePacket — shared table toasts (shuffle).
+    private static final String PROTOCOL_VERSION = "7";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(CardTableMod.MODID, "main"),
@@ -62,6 +64,10 @@ public final class NetworkHandler
                 HandSyncPacket::encode,
                 HandSyncPacket::decode,
                 HandSyncPacket::handle);
+        CHANNEL.registerMessage(nextPacketId++, TableNoticePacket.class,
+                TableNoticePacket::encode,
+                TableNoticePacket::decode,
+                TableNoticePacket::handle);
     }
 
     public static void sendToServer(Object packet)
