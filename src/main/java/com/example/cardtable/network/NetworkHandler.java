@@ -5,6 +5,7 @@ import com.example.cardtable.network.packet.CardActionPacket;
 import com.example.cardtable.network.packet.CardTableMembershipPacket;
 import com.example.cardtable.network.packet.ContentPackListPacket;
 import com.example.cardtable.network.packet.ContentPackRequestPacket;
+import com.example.cardtable.network.packet.CursorSyncPacket;
 import com.example.cardtable.network.packet.HandSyncPacket;
 import com.example.cardtable.network.packet.TableNoticePacket;
 import net.minecraft.resources.ResourceLocation;
@@ -22,7 +23,8 @@ public final class NetworkHandler
     // "6": Move carries playRotation so a card leaving hand lands upright
     //      on the actor's rotated view.
     // "7": TableNoticePacket — shared table toasts (shuffle).
-    private static final String PROTOCOL_VERSION = "7";
+    // "8": CursorSyncPacket — seated-player mouse cursors on the table view.
+    private static final String PROTOCOL_VERSION = "8";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(CardTableMod.MODID, "main"),
@@ -68,6 +70,10 @@ public final class NetworkHandler
                 TableNoticePacket::encode,
                 TableNoticePacket::decode,
                 TableNoticePacket::handle);
+        CHANNEL.registerMessage(nextPacketId++, CursorSyncPacket.class,
+                CursorSyncPacket::encode,
+                CursorSyncPacket::decode,
+                CursorSyncPacket::handle);
     }
 
     public static void sendToServer(Object packet)

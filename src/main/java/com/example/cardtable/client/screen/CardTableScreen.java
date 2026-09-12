@@ -10,6 +10,7 @@ import com.example.cardtable.api.ZoneDefinition;
 import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.card.CardInstance;
 import com.example.cardtable.card.ZoneState;
+import com.example.cardtable.client.ClientCursorStore;
 import com.example.cardtable.client.ClientHandStore;
 import com.example.cardtable.client.ClientTableNotices;
 import com.example.cardtable.client.ModKeyBindings;
@@ -20,6 +21,7 @@ import com.example.cardtable.menu.CardTableMenu;
 import com.example.cardtable.network.NetworkHandler;
 import com.example.cardtable.network.packet.CardActionPacket;
 import com.example.cardtable.network.packet.CardTableMembershipPacket;
+import com.example.cardtable.network.packet.CursorSyncPacket;
 import com.example.cardtable.card.ZoneRef;
 import com.example.cardtable.table.TableGraph;
 import com.example.cardtable.table.TableGroupService;
@@ -33,6 +35,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.core.BlockPos;
+import net.minecraft.Util;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
@@ -144,6 +147,14 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int OWN_SEAT_EDGE_GAP = 6;
     /** Most a seat name may occupy on screen before it is trimmed with an ellipsis. */
     private static final int SEAT_NAME_MAX_WIDTH = 96;
+    /**
+     * Minimum interval between client→server cursor reports. Together with
+     * {@link #CURSOR_REPORT_MIN_MOVE} this keeps a still mouse silent and a
+     * busy one at roughly 20 samples/second.
+     */
+    private static final long CURSOR_REPORT_INTERVAL_MS = 50L;
+    /** Minimum screen-pixel displacement since the last report before a new one is sent. */
+    private static final double CURSOR_REPORT_MIN_MOVE = 2.0D;
     /** Horizontal padding between label text and the edge of its backing plate. */
     private static final int LABEL_PAD_X = 2;
     /** Vertical padding between label text and its backing plate. */
@@ -210,6 +221,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private TableView view;
     private int lastMouseX;
     private int lastMouseY;
+
+    // Cursor-report throttle: last send time and the screen position that
+    // send covered. Unsent until the first frame whose view is ready.
+    private long lastCursorReportMs;
+    private int lastCursorReportX = Integer.MIN_VALUE;
+    private int lastCursorReportY = Integer.MIN_VALUE;
+    private boolean cursorReportPrimed;
 
     /** Card currently held by the mouse; only a client preview, the server owns the real move. */
     @Nullable
@@ -280,6 +298,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     {
         super.removed();
         ClientTableNotices.clear();
+        ClientCursorStore.clear();
         this.animations.clear();
         this.pileAnchors.clear();
     }
@@ -1410,6 +1429,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         this.cells = group != null ? this.computeCells(group) : List.of();
         this.seats = group != null ? this.computeSeats(group) : List.of();
         this.view = this.computeView();
+        // First frame whose view exists also primes a cursor report, so
+        // peers see a position even when the local mouse never moves.
+        if (!this.cursorReportPrimed && this.view != null)
+        {
+            this.cursorReportPrimed = true;
+            this.maybeReportCursor(this.lastMouseX, this.lastMouseY);
+        }
 
         // The vanilla slot pass below draws the backpack before this method's
         // board content, which is what used to let a card cover the panel. Park
@@ -1428,6 +1454,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         this.renderSeats(graphics, mouseX, mouseY);
         this.renderHand(graphics, mouseX, mouseY);
         this.renderFlights(graphics);
+        this.renderRemoteCursors(graphics);
         this.renderNotice(graphics);
         this.renderStatus(graphics);
         this.renderSideHelp(graphics, group);
@@ -1483,6 +1510,123 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             this.drawCard(graphics, card, faceUp, centreX, centreY,
                     CARD_WIDTH, CARD_HEIGHT, false, flight.rotationAt(now));
         }
+    }
+
+    /**
+     * Remote seated players' mouse cursors: a small colored arrow with a
+     * same-color name tag underneath, placed by each peer's normalized table
+     * sample and turned through this client's view rotation. The local
+     * player is skipped — their real cursor is already under the mouse.
+     * Sits above the cards and below the backpack overlay.
+     */
+    private void renderRemoteCursors(GuiGraphics graphics)
+    {
+        if (this.view == null || this.minecraft == null || this.minecraft.player == null)
+        {
+            return;
+        }
+        UUID selfId = this.minecraft.player.getUUID();
+        for (ClientCursorStore.CursorView cursor : ClientCursorStore.activeCursors(this.menu.getTablePosition()))
+        {
+            if (selfId.equals(cursor.playerId()))
+            {
+                continue;
+            }
+            double tableX = playfieldLeft() + cursor.normX() * playfieldWidth();
+            double tableY = playfieldTop() + cursor.normY() * playfieldHeight();
+            double[] screen = this.view.tableToScreen(tableX, tableY);
+            int tipX = (int) Math.round(screen[0]);
+            int tipY = (int) Math.round(screen[1]);
+            this.drawCursorArrow(graphics, tipX, tipY, cursor.color());
+            String name = this.trimToWidth(cursor.playerName(), SEAT_NAME_MAX_WIDTH);
+            if (!name.isEmpty())
+            {
+                this.drawCenteredLabel(graphics, Component.literal(name),
+                        tipX + 3, tipY + 10, cursor.color());
+            }
+        }
+    }
+
+    /**
+     * Compact pixel triangle pointing at the tip, drawn only with
+     * {@code fill} so the feature needs no extra texture. A thin dark rim
+     * keeps the colored body readable on the light quartz board.
+     */
+    private void drawCursorArrow(GuiGraphics graphics, int tipX, int tipY, int color)
+    {
+        final int height = 9;
+        final int rim = 0xFF241C14;
+        for (int row = 0; row < height; row++)
+        {
+            int left = tipX;
+            int right = tipX + 2 + row;
+            graphics.fill(left - 1, tipY + row, left, tipY + row + 1, rim);
+            graphics.fill(left, tipY + row, right, tipY + row + 1, color);
+            graphics.fill(right, tipY + row, right + 1, tipY + row + 1, rim);
+        }
+        graphics.fill(tipX - 1, tipY + height, tipX + height + 2, tipY + height + 1, rim);
+    }
+
+    /**
+     * Throttled client→server cursor report. Sent only while the viewer is
+     * seated and the view transform exists; at most one sample per
+     * {@link #CURSOR_REPORT_INTERVAL_MS} and only after a
+     * {@link #CURSOR_REPORT_MIN_MOVE} pixel displacement from the last send.
+     */
+    private void maybeReportCursor(double mouseX, double mouseY)
+    {
+        if (this.minecraft == null || this.minecraft.player == null
+                || !this.menu.isParticipant(this.minecraft.player)
+                || this.view == null)
+        {
+            return;
+        }
+        long now = Util.getMillis();
+        if (this.lastCursorReportMs != 0L
+                && now - this.lastCursorReportMs < CURSOR_REPORT_INTERVAL_MS)
+        {
+            return;
+        }
+        if (this.lastCursorReportX != Integer.MIN_VALUE)
+        {
+            double dx = mouseX - this.lastCursorReportX;
+            double dy = mouseY - this.lastCursorReportY;
+            if (dx * dx + dy * dy < CURSOR_REPORT_MIN_MOVE * CURSOR_REPORT_MIN_MOVE)
+            {
+                return;
+            }
+        }
+        float[] norm = this.screenToTableNorm(mouseX, mouseY);
+        if (norm == null)
+        {
+            return;
+        }
+        NetworkHandler.CHANNEL.sendToServer(new CursorSyncPacket(
+                this.menu.getTablePosition(), null, "", norm[0], norm[1]));
+        this.lastCursorReportMs = now;
+        this.lastCursorReportX = (int) mouseX;
+        this.lastCursorReportY = (int) mouseY;
+    }
+
+    /**
+     * Screen point → playfield-normalized table coordinates, clamped to 0..1
+     * so a cursor over the backpack panel, hand strip or seat ring still
+     * reads as "hand at the table edge" rather than vanishing off-board.
+     */
+    @Nullable
+    private float[] screenToTableNorm(double mouseX, double mouseY)
+    {
+        if (this.view == null)
+        {
+            return null;
+        }
+        double[] tablePoint = this.view.screenToTable(mouseX, mouseY);
+        double normX = (tablePoint[0] - playfieldLeft()) / (double) Math.max(1, playfieldWidth());
+        double normY = (tablePoint[1] - playfieldTop()) / (double) Math.max(1, playfieldHeight());
+        return new float[] {
+                (float) Math.max(0.0D, Math.min(1.0D, normX)),
+                (float) Math.max(0.0D, Math.min(1.0D, normY))
+        };
     }
 
     private void renderSeats(GuiGraphics graphics, int mouseX, int mouseY)
@@ -2285,6 +2429,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             return;
         }
         this.sendAction(new CardActionPacket.Action.Perform(action.id(), null));
+    }
+
+    @Override
+    public void mouseMoved(double mouseX, double mouseY)
+    {
+        this.maybeReportCursor(mouseX, mouseY);
+        super.mouseMoved(mouseX, mouseY);
     }
 
     @Override

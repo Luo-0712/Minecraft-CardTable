@@ -308,6 +308,45 @@ public final class TableGroupService
         return false;
     }
 
+    /**
+     * Online seated players of the group containing {@code position}, in the
+     * group's deterministic block-position order. Offline occupants are
+     * skipped. This is the audience for table-wide broadcasts (toasts, cursor
+     * relays); spectators and unseated viewers are never included.
+     */
+    public static List<ServerPlayer> seatedPlayers(ServerLevel level, BlockPos position)
+    {
+        GroupView group = resolve(level, position);
+        return group == null ? List.of() : seatedPlayers(level, group);
+    }
+
+    /** Same as {@link #seatedPlayers(ServerLevel, BlockPos)} for an already-resolved group. */
+    public static List<ServerPlayer> seatedPlayers(ServerLevel level, GroupView group)
+    {
+        List<BlockPos> positions = new ArrayList<>(group.positions());
+        positions.sort(TableGraph::comparePositions);
+        List<ServerPlayer> seated = new ArrayList<>(positions.size());
+        for (BlockPos pos : positions)
+        {
+            CardTableBlockEntity section = blockEntityAt(level, pos);
+            if (section == null)
+            {
+                continue;
+            }
+            UUID occupantId = section.getSectionState().getOccupantId();
+            if (occupantId == null)
+            {
+                continue;
+            }
+            ServerPlayer player = level.getServer().getPlayerList().getPlayer(occupantId);
+            if (player != null)
+            {
+                seated.add(player);
+            }
+        }
+        return seated;
+    }
+
     // Called from CardTableBlock#onRemove after the block disappeared but
     // before its block entity is detached: survivors re-resolve with the dead
     // position excluded, so a cut vertex correctly splits the group.
