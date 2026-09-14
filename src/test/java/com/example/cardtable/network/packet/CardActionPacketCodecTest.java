@@ -90,6 +90,18 @@ class CardActionPacketCodecTest
         assertActionRoundTrip(new CardActionPacket.Action.Perform(ACTION_ID, CARD_ID));
     }
 
+    @Test
+    void reorderHandRoundTrips()
+    {
+        assertActionRoundTrip(new CardActionPacket.Action.ReorderHand(CARD_ID, 3));
+    }
+
+    @Test
+    void reorderHandAtZeroRoundTrips()
+    {
+        assertActionRoundTrip(new CardActionPacket.Action.ReorderHand(CARD_ID, 0));
+    }
+
     /** Non-Move actions are records with value equality, so a plain compare suffices. */
     private static void assertActionRoundTrip(CardActionPacket.Action action)
     {
