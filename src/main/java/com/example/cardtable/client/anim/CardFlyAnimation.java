@@ -12,8 +12,9 @@ import java.util.UUID;
  *
  * <p>Geometry is captured in screen pixels at spawn time (after the view
  * rotation is applied), so a flight is independent of the table-space
- * mapping that produced it. A short parabolic lift on Y keeps overlapping
- * cards legible while the mover is in the air.</p>
+ * mapping that produced it. The path is a straight segment; only the
+ * timing is non-linear — a strong ease-out so the card spends most of the
+ * duration covering distance and then brakes softly into the target.</p>
  */
 public final class CardFlyAnimation
 {
@@ -105,15 +106,22 @@ public final class CardFlyAnimation
         return Math.max(0.0F, Math.min(1.0F, t));
     }
 
-    /** Smoothed 0..1 progress (ease-out cubic). */
+    /**
+     * Smoothed 0..1 progress. Quartic ease-out: distance is covered quickly
+     * at first, then speed falls off as a power of remaining time (not a
+     * linear ramp), so the last stretch is a soft brake onto the target.
+     */
     public float easedProgress(long nowMillis)
     {
         float t = this.progress(nowMillis);
         float inv = 1.0F - t;
-        return 1.0F - inv * inv * inv;
+        return 1.0F - inv * inv * inv * inv;
     }
 
-    /** {@code {x, y, width, height}} of the card's AABB at {@code nowMillis}. */
+    /**
+     * {@code {x, y, width, height}} of the card's AABB at {@code nowMillis}.
+     * Straight-line interpolation only — no arc offset.
+     */
     public int[] rectAt(long nowMillis)
     {
         float t = this.easedProgress(nowMillis);
@@ -121,9 +129,6 @@ public final class CardFlyAnimation
         int y = Math.round(this.fromY + (this.toY - this.fromY) * t);
         int width = Math.max(1, Math.round(this.fromWidth + (this.toWidth - this.fromWidth) * t));
         int height = Math.max(1, Math.round(this.fromHeight + (this.toHeight - this.fromHeight) * t));
-        int travel = (int) Math.hypot(this.toX - this.fromX, this.toY - this.fromY);
-        float arc = Math.min(36.0F, Math.max(12.0F, travel * 0.12F));
-        y -= Math.round(arc * 4.0F * t * (1.0F - t));
         return new int[] {x, y, width, height};
     }
 

@@ -9,6 +9,7 @@ import com.example.cardtable.api.TableLayoutDefinition;
 import com.example.cardtable.api.ZoneDefinition;
 import com.example.cardtable.block.entity.CardTableBlockEntity;
 import com.example.cardtable.card.CardInstance;
+import com.example.cardtable.card.HandOrder;
 import com.example.cardtable.card.ZoneState;
 import com.example.cardtable.client.ClientCursorStore;
 import com.example.cardtable.client.ClientHandStore;
@@ -180,6 +181,9 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private static final int COLOR_SEAT_EMPTY = 0x904A3624;
     private static final int COLOR_SEAT_SELF = 0xFFD4B483;
     private static final int COLOR_HOVER = 0xFFF5F0E6;
+    /** Frame around the most recent card that entered the table. */
+    private static final int COLOR_LAST_ENTER = 0xFFFFD48A;
+    private static final int COLOR_LAST_ENTER_CORE = 0xFFFFE8B0;
     private static final int COLOR_TEXT_DIM = 0xFFC9BFA8;
     /**
      * Status and error text. Bright on purpose: it is drawn on
@@ -252,12 +256,30 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private boolean handPanning;
     /** Mouse x at the moment the current pan started, for drag-to-scroll. */
     private double handPanLastMouseX;
+    /**
+     * Insert-slot under the cursor while a hand card is dragged over the
+     * strip, or -1 when the indicator is hidden. Index is into the hand
+     * <em>without</em> the held card (what {@code ReorderHand} expects).
+     */
+    private int handInsertIndex = -1;
 
     // Layout-driven render state, rebuilt every frame by renderZones():
     // drop/hover targets in render order (last entry = topmost) and the cards
     // currently visible on the playfield with their pixel rects.
     private List<ZoneHit> zoneHits = List.of();
     private List<RenderedCard> renderedCards = List.of();
+    /** Own-hand card placements for this frame, feeding the animation tracker. */
+    private final Map<UUID, CardAnimationTracker.Placement> handPlacements = new LinkedHashMap<>();
+    /** Remote seat hand-fan AABBs, by section pos. */
+    private final Map<BlockPos, int[]> seatHandAnchors = new LinkedHashMap<>();
+    /** Sentinel that no computed structure signature can equal, so frame one primes. */
+    private static final int NO_VIEW_STRUCTURE = Integer.MIN_VALUE;
+    /**
+     * View structure (playfield, seat ring, zone and pile rects) as of the
+     * last observe; any change re-primes the animation baseline. See
+     * {@link #viewStructureSignature()}.
+     */
+    private int animViewStructure = NO_VIEW_STRUCTURE;
     // True while the bound layout vanished from the local registry: the view
     // degrades to the default layout and the status line warns about it.
     private boolean layoutMissing;
@@ -301,6 +323,9 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         ClientCursorStore.clear();
         this.animations.clear();
         this.pileAnchors.clear();
+        this.handPlacements.clear();
+        this.seatHandAnchors.clear();
+        this.animViewStructure = NO_VIEW_STRUCTURE;
     }
 
     // Slot positions are irrelevant server-side; only the client lays them
@@ -862,6 +887,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             Rect screenRect = toScreenRect(tableView, tableRect);
             renderZone(graphics, zone, tableRect, screenRect, groupState, cards, hits, mouseX, mouseY, tableView);
         }
+        this.renderLastEnterHighlight(graphics);
     }
 
     /** Table pixel rect → screen-space AABB rect (rounded once, shared by render and hit-test). */
@@ -910,8 +936,9 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             if (!pile.isEmpty())
             {
                 // The whole stack is grabbable; hover resolves to its top card.
-                cards.add(new RenderedCard(pile.get(pile.size() - 1), grab.x(), grab.y(),
-                        grab.width(), grab.height()));
+                cards.add(new RenderedCard(pile.get(pile.size() - 1),
+                        CardAnimationTracker.Kind.STACK,
+                        grab.x(), grab.y(), grab.width(), grab.height()));
             }
             return;
         }
@@ -952,7 +979,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             this.drawCard(graphics, entry.card(), entry.card().isFaceUp(),
                     centreX, centreY, CARD_WIDTH, CARD_HEIGHT, hovered,
                     tableView.displayRotationDeg(entry.card().rotation()));
-            cards.add(new RenderedCard(entry.card(), aabb[0], aabb[1], aabb[2], aabb[3]));
+            cards.add(new RenderedCard(entry.card(), CardAnimationTracker.Kind.PLACED,
+                    aabb[0], aabb[1], aabb[2], aabb[3]));
         }
     }
 
@@ -1160,6 +1188,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         if (hand.isEmpty())
         {
             this.handStripRect = null;
+            this.handPlacements.clear();
+            this.handInsertIndex = -1;
             return;
         }
         int cardCount = hand.size();
@@ -1210,6 +1240,23 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                     stripTop + HAND_CARD_HEIGHT + 4, COLOR_PANEL);
         }
 
+        // The tracker sees the whole fan, not just the painted viewport: a card
+        // scrolled out of view must not read as having left the table, and one
+        // scrolled back in must not read as a fresh draw. Off-screen slots are
+        // recorded at their content position (outside the viewport is fine —
+        // these rects feed the frame diff, not the painter).
+        BlockPos ownSeat = ownSeatPosition();
+        this.handPlacements.clear();
+        for (int index = 0; index < cardCount; index++)
+        {
+            CardInstance card = hand.get(index);
+            int cardX = contentOriginX + index * pitch - this.handScrollOffset;
+            this.handPlacements.put(card.instanceId(),
+                    new CardAnimationTracker.Placement(CardAnimationTracker.Kind.HAND,
+                            cardX, stripTop, HAND_CARD_WIDTH, HAND_CARD_HEIGHT,
+                            card.rotation(), ownSeat, card));
+        }
+
         // Clip so partial cards at a scrolled edge never paint outside the
         // viewport; the unclipped plate behind them hugs the fan.
         graphics.enableScissor(viewportLeft, stripTop,
@@ -1237,6 +1284,19 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         }
         graphics.disableScissor();
 
+        // Manual-sort gap: while a hand card is held over the strip, mark the
+        // slot it would drop into. ownHandCards() already excludes the held
+        // card, so this index is the post-removal insert position.
+        this.handInsertIndex = -1;
+        if (this.drag != null && this.drag.fromHand()
+                && this.handStripRect != null && this.handStripRect.contains(mouseX, mouseY))
+        {
+            this.handInsertIndex = HandStripLayout.insertIndexAt(
+                    cardCount, pitch, contentOriginX, this.handScrollOffset, mouseX);
+            this.renderHandInsertHint(graphics, this.handInsertIndex, cardCount, pitch,
+                    contentOriginX, stripTop);
+        }
+
         if (overflow)
         {
             this.renderHandOverflowChrome(graphics, contentWidth, viewportWidth, viewportLeft,
@@ -1248,6 +1308,20 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             this.drawCenteredLabel(graphics, hoveredName,
                     this.width / 2, stripTop - 12, COLOR_HOVER);
         }
+    }
+
+    /**
+     * Vertical slot marker at the hand's pending insert gap: a short accent
+     * bar that reads as "the held card lands here", never covering the cards.
+     */
+    private void renderHandInsertHint(GuiGraphics graphics, int insertIndex, int cardCount,
+                                      int pitch, int contentOriginX, int stripTop)
+    {
+        int gapX = HandStripLayout.insertGapX(cardCount, pitch, contentOriginX,
+                this.handScrollOffset, insertIndex);
+        int barLeft = gapX - 1;
+        graphics.fill(barLeft, stripTop + 2, barLeft + 2,
+                stripTop + HAND_CARD_HEIGHT - 2, COLOR_SEAT_SELF);
     }
 
     /**
@@ -1313,7 +1387,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
     // One card: resolved textures with a graceful placeholder when the
     // definition or texture is missing; quarter-turn rotation via pose; hover ring.
-    // {@code card == null} draws a face-down stack layer (pile rendering).
+    // A {@code null} card has no definition to resolve, so it draws the core back.
     //
     // Contract: callers pass the card's visual centre, its natural sprite size
     // (always portrait on screen: 34x48 table / hand strip), and the display
@@ -1326,7 +1400,32 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                           boolean hovered, int rotationDegrees)
     {
         CardDefinition definition = card != null ? CardRegistry.get(card.definitionId()) : null;
-        ResourceLocation texture = resolveTexture(definition, faceUp);
+        this.drawCardTexture(graphics, resolveTexture(definition, faceUp),
+                centreX, centreY, cardWidth, cardHeight, rotationDegrees);
+        if (!hovered)
+        {
+            return;
+        }
+        int rotation = Math.floorMod(rotationDegrees, 360);
+        boolean sideways = rotation % 180 != 0;
+        int footprintWidth = sideways ? cardHeight : cardWidth;
+        int footprintHeight = sideways ? cardWidth : cardHeight;
+        int left = centreX - footprintWidth / 2;
+        int top = centreY - footprintHeight / 2;
+        graphics.renderOutline(left - 1, top - 1, footprintWidth + 2, footprintHeight + 2, COLOR_HOVER);
+    }
+
+    /**
+     * Paints one card sprite centred on {@code centreX/centreY} at its natural
+     * size under the pose turn, or the "?" placeholder when the texture (or the
+     * PNG behind it) is unknown. Split out of {@link #drawCard} so the flight
+     * pass can blit a texture it resolved itself: an unidentified card's back
+     * comes from the loaded set, not from any card definition.
+     */
+    private void drawCardTexture(GuiGraphics graphics, @Nullable ResourceLocation texture,
+                                 int centreX, int centreY, int cardWidth, int cardHeight,
+                                 int rotationDegrees)
+    {
         int rotation = Math.floorMod(rotationDegrees, 360);
         boolean sideways = rotation % 180 != 0;
         int footprintWidth = sideways ? cardHeight : cardWidth;
@@ -1334,24 +1433,11 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         int left = centreX - footprintWidth / 2;
         int top = centreY - footprintHeight / 2;
 
-        if (texture == null)
-        {
-            this.drawPlaceholder(graphics, left, top, footprintWidth, footprintHeight);
-            if (hovered)
-            {
-                graphics.renderOutline(left - 1, top - 1, footprintWidth + 2, footprintHeight + 2, COLOR_HOVER);
-            }
-            return;
-        }
-
-        CardTextureResolver.Binding binding = CardTextureResolver.resolve(texture).orElse(null);
+        CardTextureResolver.Binding binding =
+                texture != null ? CardTextureResolver.resolve(texture).orElse(null) : null;
         if (binding == null)
         {
             this.drawPlaceholder(graphics, left, top, footprintWidth, footprintHeight);
-            if (hovered)
-            {
-                graphics.renderOutline(left - 1, top - 1, footprintWidth + 2, footprintHeight + 2, COLOR_HOVER);
-            }
             return;
         }
 
@@ -1366,10 +1452,6 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         graphics.blit(binding.location(), 0, 0, cardWidth, cardHeight,
                 0.0F, 0.0F, binding.width(), binding.height(), binding.width(), binding.height());
         pose.popPose();
-        if (hovered)
-        {
-            graphics.renderOutline(left - 1, top - 1, footprintWidth + 2, footprintHeight + 2, COLOR_HOVER);
-        }
     }
 
     // Face-down cards fall back: card override → set default → core back.
@@ -1494,11 +1576,13 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     /**
      * Own-drop flights only: drawn above the board and hand so a card leaving
      * the strip or a pile reads as motion, not a teleport, while the server
-     * round-trip is still in flight.
+     * round-trip is still in flight. Also feeds the remote draw/play diff so
+     * other players' hands and table cards animate the same way.
      */
     private void renderFlights(GuiGraphics graphics)
     {
         long now = System.currentTimeMillis();
+        this.observeAnimations(now);
         this.animations.tick(now);
         for (CardFlyAnimation flight : this.animations.flights())
         {
@@ -1506,10 +1590,199 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             int centreX = rect[0] + rect[2] / 2;
             int centreY = rect[1] + rect[3] / 2;
             CardInstance card = flight.card();
-            boolean faceUp = flight.faceUp() || (card != null && card.isFaceUp());
+            if (card == null)
+            {
+                // An unidentified flight (another seat's draw) wears the back
+                // the table's loaded set declares — the same face the stock
+                // pile and the remote hand fans show, never the core stand-in.
+                this.drawCardTexture(graphics, this.activeSetBackTexture(),
+                        centreX, centreY, CARD_WIDTH, CARD_HEIGHT, flight.rotationAt(now));
+                continue;
+            }
+            boolean faceUp = flight.faceUp() || card.isFaceUp();
             this.drawCard(graphics, card, faceUp, centreX, centreY,
                     CARD_WIDTH, CARD_HEIGHT, false, flight.rotationAt(now));
         }
+    }
+
+    /**
+     * Diffs this frame's visible cards against the last one and hands the
+     * result to {@link CardAnimationTracker}. Any change to the view's
+     * structure — a resize, a seat resolving or emptying, a layout binding —
+     * re-primes the baseline instead of treating every card as having moved.
+     */
+    private void observeAnimations(long nowMillis)
+    {
+        // The drag preview owns the held card's presence: without this, picking
+        // a card up reads as it leaving the table and letting go — back onto
+        // the strip, or into a new slot — as it drawing itself from the stock.
+        this.animations.holdCard(this.drag != null ? this.drag.instanceId() : null);
+
+        Map<UUID, CardAnimationTracker.Placement> current = new LinkedHashMap<>();
+        for (RenderedCard rendered : this.renderedCards)
+        {
+            current.put(rendered.card().instanceId(),
+                    new CardAnimationTracker.Placement(rendered.kind(),
+                            rendered.x(), rendered.y(), rendered.width(), rendered.height(),
+                            this.view != null
+                                    ? this.view.displayRotationDeg(rendered.card().rotation())
+                                    : rendered.card().rotation(),
+                            null, rendered.card()));
+        }
+        current.putAll(this.handPlacements);
+
+        Map<BlockPos, Integer> handCounts = new LinkedHashMap<>();
+        Map<BlockPos, int[]> seatPlates = new LinkedHashMap<>();
+        for (SeatSlot seat : this.seats)
+        {
+            handCounts.put(seat.sectionPos(), this.handCountAt(seat.sectionPos()));
+            int half = SEAT_SIZE / 2;
+            seatPlates.put(seat.sectionPos(), new int[] {
+                    seat.x() - half, seat.y() - half, SEAT_SIZE, SEAT_SIZE
+            });
+        }
+
+        int[] preferredDrawStack = resolveDrawStackAnchor();
+
+        int structure = this.viewStructureSignature();
+        if (structure != this.animViewStructure)
+        {
+            this.animViewStructure = structure;
+            this.animations.reprime(current, handCounts);
+            return;
+        }
+        this.animations.observe(current, handCounts, seatPlates, this.seatHandAnchors,
+                preferredDrawStack, nowMillis);
+    }
+
+    /**
+     * Cheap signature of everything that decides where cards are drawn: the
+     * playfield, the seat ring and the zone/pile rects. The client's own seat
+     * can arrive a block-entity update after the screen opened (the join
+     * update is flushed at the end of the server tick, behind the open-screen
+     * packet), so the first frames still show the pre-join view: no own hand,
+     * no view rotation. When that rebuild lands, every hand card would
+     * "appear" and every table card would "move" at once — all of it animated.
+     * A changed signature re-seeds the baseline instead, so a view rebuild is
+     * never mistaken for a card event.
+     *
+     * <p>The hand strip's own geometry is deliberately excluded: a draw
+     * re-fans the strip in the same frame the new card appears, and folding
+     * that into the signature would swallow the draw's flight.</p>
+     */
+    private int viewStructureSignature()
+    {
+        int hash = 1;
+        hash = hash * 31 + playfieldLeft();
+        hash = hash * 31 + playfieldTop();
+        hash = hash * 31 + playfieldWidth();
+        hash = hash * 31 + playfieldHeight();
+        for (SeatSlot seat : this.seats)
+        {
+            hash = hash * 31 + seat.sectionPos().hashCode();
+            hash = hash * 31 + seat.x();
+            hash = hash * 31 + seat.y();
+            hash = hash * 31 + (seat.occupantId() != null ? seat.occupantId().hashCode() : 0);
+        }
+        for (ZoneHit hit : this.zoneHits)
+        {
+            hash = hash * 31 + hit.zoneId().hashCode();
+            hash = hash * 31 + hit.hitRect().hashCode();
+        }
+        for (Map.Entry<ResourceLocation, Rect> anchor : this.pileAnchors.entrySet())
+        {
+            hash = hash * 31 + anchor.getKey().hashCode();
+            hash = hash * 31 + anchor.getValue().hashCode();
+        }
+        return hash;
+    }
+
+    /**
+     * Screen AABB of the layout's stock pile — the public draw origin for
+     * every seat. Falls back to the first STACK anchor when the layout
+     * declares no stock (bare or unusual packs).
+     */
+    @Nullable
+    private int[] resolveDrawStackAnchor()
+    {
+        TableGroupService.GroupView group = this.clientGroup();
+        TableGroupState groupState = group != null ? clientGroupState(group) : null;
+        if (groupState != null)
+        {
+            TableLayoutDefinition layout = resolveActiveLayout(groupState);
+            if (layout != null)
+            {
+                ZoneDefinition stock = layout.initialZoneFor(groupState.getActiveSetId());
+                if (stock != null)
+                {
+                    Rect anchor = this.pileAnchors.get(stock.id());
+                    if (anchor != null)
+                    {
+                        return new int[] {anchor.x(), anchor.y(), anchor.width(), anchor.height()};
+                    }
+                }
+            }
+        }
+        for (Rect anchor : this.pileAnchors.values())
+        {
+            return new int[] {anchor.x(), anchor.y(), anchor.width(), anchor.height()};
+        }
+        return null;
+    }
+
+    /**
+     * Soft gold frame around the most recent card that entered the table.
+     * Follows the card's live rect; disappears while the card is held, in
+     * flight, or after a newer card lands.
+     */
+    private void renderLastEnterHighlight(GuiGraphics graphics)
+    {
+        UUID lastId = this.animations.lastTableCardId();
+        if (lastId == null)
+        {
+            return;
+        }
+        RenderedCard target = null;
+        for (RenderedCard rendered : this.renderedCards)
+        {
+            if (rendered.card().instanceId().equals(lastId))
+            {
+                target = rendered;
+                break;
+            }
+        }
+        if (target == null)
+        {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        float pulse = 0.55F + 0.45F * (float) Math.sin(now / 280.0D);
+        int alpha = (int) (150 + 90 * pulse);
+        int glow = (Math.max(0, Math.min(255, alpha)) << 24) | (COLOR_LAST_ENTER & 0xFFFFFF);
+        int pad = 2;
+        graphics.renderOutline(target.x() - pad, target.y() - pad,
+                target.width() + pad * 2, target.height() + pad * 2, glow);
+        graphics.renderOutline(target.x() - 1, target.y() - 1,
+                target.width() + 2, target.height() + 2, COLOR_LAST_ENTER_CORE);
+    }
+
+    /**
+     * The group identity as this client's own synced group state reports it
+     * (the master block entity's {@code TableId}) — the same identity source
+     * every card read goes through. Null when the table is momentarily
+     * unresolvable; consumers treat that as "no data for this view".
+     */
+    @Nullable
+    private UUID clientTableId()
+    {
+        if (this.minecraft == null || this.minecraft.level == null)
+        {
+            return null;
+        }
+        TableGroupService.GroupView group = this.clientGroup();
+        return group != null
+                && this.minecraft.level.getBlockEntity(group.masterPos()) instanceof CardTableBlockEntity master
+                ? master.getGroupState().getTableId() : null;
     }
 
     /**
@@ -1526,7 +1799,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             return;
         }
         UUID selfId = this.minecraft.player.getUUID();
-        for (ClientCursorStore.CursorView cursor : ClientCursorStore.activeCursors(this.menu.getTablePosition()))
+        // Group identity from this client's own synced group state — the
+        // same source the card data is read through; nothing packet-declared
+        // is matched against a locally resolved position.
+        for (ClientCursorStore.CursorView cursor : ClientCursorStore.activeCursors(clientTableId()))
         {
             if (selfId.equals(cursor.playerId()))
             {
@@ -1601,8 +1877,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         {
             return;
         }
-        NetworkHandler.CHANNEL.sendToServer(new CursorSyncPacket(
-                this.menu.getTablePosition(), null, "", norm[0], norm[1]));
+        NetworkHandler.CHANNEL.sendToServer(CursorSyncPacket.report(
+                this.menu.getTablePosition(), norm[0], norm[1]));
         this.lastCursorReportMs = now;
         this.lastCursorReportX = (int) mouseX;
         this.lastCursorReportY = (int) mouseY;
@@ -1632,6 +1908,7 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     private void renderSeats(GuiGraphics graphics, int mouseX, int mouseY)
     {
         UUID selfId = this.minecraft.player != null ? this.minecraft.player.getUUID() : null;
+        this.seatHandAnchors.clear();
 
         for (SeatSlot seat : this.seats)
         {
@@ -1718,10 +1995,16 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         double offset = SEAT_SIZE / 2.0D + SEAT_HAND_CARD_WIDTH / 2.0D + SEAT_HAND_GAP;
         int centreX = seat.x() + (int) Math.round(dx / length * offset);
         int centreY = seat.y() + (int) Math.round(dy / length * offset);
+        this.seatHandAnchors.put(seat.sectionPos(), new int[] {
+                centreX - SEAT_HAND_CARD_WIDTH / 2,
+                centreY - SEAT_HAND_CARD_HEIGHT / 2,
+                SEAT_HAND_CARD_WIDTH,
+                SEAT_HAND_CARD_HEIGHT
+        });
 
         int layers = Math.min(SEAT_HAND_MAX_LAYERS, count);
         CardTextureResolver.Binding binding = CardTextureResolver
-                .resolve(this.resolveHandBackTexture()).orElse(null);
+                .resolve(this.activeSetBackTexture()).orElse(null);
         for (int layer = 0; layer < layers; layer++)
         {
             int left = centreX + layer * SEAT_HAND_STACK_OFFSET - SEAT_HAND_CARD_WIDTH / 2;
@@ -1769,11 +2052,14 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     }
 
     /**
-     * Back texture for the remote hand stack: the active set's default back,
+     * Back texture of the table's loaded set: its declared default back,
      * falling through to the core back so a pack without one still shows a
-     * card rather than a grey placeholder.
+     * card rather than a grey placeholder. Every place that has to paint a
+     * back for a card it cannot identify — the remote hand stacks and the
+     * anonymous draw flights — resolves it here, so a table never mixes back
+     * designs.
      */
-    private ResourceLocation resolveHandBackTexture()
+    private ResourceLocation activeSetBackTexture()
     {
         TableGroupService.GroupView group = this.clientGroup();
         if (group == null || this.minecraft == null || this.minecraft.level == null)
@@ -1895,7 +2181,10 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
      */
     private void renderNotice(GuiGraphics graphics)
     {
-        Component notice = ClientTableNotices.activeNotice(this.menu.getTablePosition());
+        // Same identity model as the remote cursors: the toast is keyed by
+        // the group's TableId and matched against this client's own synced
+        // group state.
+        Component notice = ClientTableNotices.activeNotice(clientTableId());
         if (notice.getString().isEmpty())
         {
             return;
@@ -2124,7 +2413,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
                         : viewportLeft + Math.max(0, (viewportWidth - contentWidth) / 2);
                 int cardX = contentOriginX + index * pitch - this.handScrollOffset;
                 int stripTop = this.handStripRect.y() + 4;
-                return new RenderedCard(hand.get(index), cardX, stripTop,
+                return new RenderedCard(hand.get(index), CardAnimationTracker.Kind.HAND,
+                        cardX, stripTop,
                         HAND_CARD_WIDTH, HAND_CARD_HEIGHT);
             }
         }
@@ -2219,20 +2509,31 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
 
         // The hand strip keeps the highest priority (unchanged behavior). The
         // hand target carries no seat any more: the server resolves it to the
-        // sender's own seat.
+        // sender's own seat. A card already in the hand is a manual sort:
+        // drop it into the gap under the cursor instead of appending.
         int playRotation = playRotation();
         if (this.handStripRect != null && this.handStripRect.contains(mouseX, mouseY))
         {
             if (ownSeatPosition() != null)
             {
-                this.sendAction(new CardActionPacket.Action.Move(instanceId,
-                        new ZoneRef(TableLayoutDefinition.ZONE_HAND), null, false, 0));
-                Rect strip = this.handStripRect;
-                spawnLocalFlight(drag,
-                        new Rect(strip.x() + (strip.width() - HAND_CARD_WIDTH) / 2,
-                                strip.y() + (strip.height() - HAND_CARD_HEIGHT) / 2,
-                                HAND_CARD_WIDTH, HAND_CARD_HEIGHT),
-                        drag.card().rotation(), drag.card().isFaceUp());
+                if (drag.fromHand())
+                {
+                    this.finishHandReorder(drag, mouseX);
+                }
+                else
+                {
+                    this.sendAction(new CardActionPacket.Action.Move(instanceId,
+                            new ZoneRef(TableLayoutDefinition.ZONE_HAND), null, false, 0));
+                    Rect strip = this.handStripRect;
+                    // Landing in the owner's own strip: the face, since a hand
+                    // card is always readable to the player who holds it.
+                    spawnLocalFlight(drag,
+                            new Rect(strip.x() + (strip.width() - HAND_CARD_WIDTH) / 2,
+                                    strip.y() + (strip.height() - HAND_CARD_HEIGHT) / 2,
+                                    HAND_CARD_WIDTH, HAND_CARD_HEIGHT),
+                            drag.card().rotation(), true,
+                            CardAnimationTracker.Kind.HAND);
+                }
             }
             return;
         }
@@ -2258,7 +2559,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
             }
             int toRotation = this.view != null ? this.view.displayRotationDeg(0) : 0;
             spawnLocalFlight(drag, pile, toRotation,
-                    drag.fromHand() ? !faceDown : drag.card().isFaceUp());
+                    drag.fromHand() ? !faceDown : drag.card().isFaceUp(),
+                    CardAnimationTracker.Kind.STACK);
             return;
         }
         // Placed zones take the drop point in table space: the screen point
@@ -2293,19 +2595,67 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
         int toRotation = this.view != null
                 ? this.view.displayRotationDeg(cardTableRotation) : cardTableRotation;
         spawnLocalFlight(drag, new Rect(aabb[0], aabb[1], aabb[2], aabb[3]), toRotation,
-                drag.fromHand() ? !faceDown : drag.card().isFaceUp());
+                drag.fromHand() ? !faceDown : drag.card().isFaceUp(),
+                CardAnimationTracker.Kind.PLACED);
     }
 
     /**
      * Starts the own-drop flight immediately. Purely visual: the server still
      * validates and the next sync overwrites whatever it rejected.
      */
-    private void spawnLocalFlight(Drag drag, Rect toAabb, int toRotation, boolean faceUp)
+    private void spawnLocalFlight(Drag drag, Rect toAabb, int toRotation, boolean faceUp,
+                                  CardAnimationTracker.Kind kind)
     {
-        this.animations.spawnLocalPlay(drag.card(), drag.instanceId(),
+        this.animations.spawnLocalPlay(drag.card(), drag.instanceId(), kind,
                 drag.originX(), drag.originY(), drag.originWidth(), drag.originHeight(),
                 toAabb.x(), toAabb.y(), toAabb.width(), toAabb.height(),
                 drag.originRotation(), toRotation, faceUp, System.currentTimeMillis());
+    }
+
+    /**
+     * Manual in-hand sort: compute the gap under the cursor, predict it
+     * locally so the fan settles without waiting for RTT, then ask the
+     * server. A drop that restores the original order sends nothing.
+     */
+    private void finishHandReorder(Drag drag, double mouseX)
+    {
+        BlockPos ownSection = ownSeatPosition();
+        if (ownSection == null)
+        {
+            return;
+        }
+        List<CardInstance> fullHand = ClientHandStore.hand(ownSection);
+        int fromIndex = HandOrder.indexOf(fullHand, drag.instanceId());
+        if (fromIndex < 0)
+        {
+            return;
+        }
+        int toIndex = this.handInsertIndexAt(mouseX);
+        if (toIndex == fromIndex)
+        {
+            return;
+        }
+        ClientHandStore.reorder(ownSection, drag.instanceId(), toIndex);
+        this.sendAction(new CardActionPacket.Action.ReorderHand(drag.instanceId(), toIndex));
+    }
+
+    /**
+     * Insert slot under the cursor for the hand <em>without</em> the held
+     * card (same layout the strip paints while dragging).
+     */
+    private int handInsertIndexAt(double mouseX)
+    {
+        List<CardInstance> hand = ownHandCards();
+        int cardCount = hand.size();
+        int viewportWidth = HandStripLayout.viewportWidth(this.width);
+        int pitch = HandStripLayout.pitch(cardCount, viewportWidth);
+        int contentWidth = HandStripLayout.contentWidth(cardCount, pitch);
+        boolean overflow = HandStripLayout.isOverflow(contentWidth, viewportWidth);
+        int contentOriginX = overflow
+                ? HandStripLayout.VIEWPORT_PAD_X
+                : HandStripLayout.VIEWPORT_PAD_X + Math.max(0, (viewportWidth - contentWidth) / 2);
+        return HandStripLayout.insertIndexAt(cardCount, pitch, contentOriginX,
+                this.handScrollOffset, mouseX);
     }
 
     /**
@@ -2609,7 +2959,8 @@ public class CardTableScreen extends AbstractContainerScreen<CardTableMenu>
     }
 
     /** One card as drawn this frame, with its pixel rect (drives hover hit-test). */
-    private record RenderedCard(CardInstance card, int x, int y, int width, int height)
+    private record RenderedCard(CardInstance card, CardAnimationTracker.Kind kind,
+                                int x, int y, int width, int height)
     {
     }
 
