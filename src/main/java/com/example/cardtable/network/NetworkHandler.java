@@ -24,7 +24,8 @@ public final class NetworkHandler
     //      on the actor's rotated view.
     // "7": TableNoticePacket — shared table toasts (shuffle).
     // "8": CursorSyncPacket — seated-player mouse cursors on the table view.
-    private static final String PROTOCOL_VERSION = "8";
+    // "9": ReorderHand — manual in-hand sort.
+    private static final String PROTOCOL_VERSION = "9";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(CardTableMod.MODID, "main"),

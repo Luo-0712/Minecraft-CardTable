@@ -73,7 +73,7 @@
   "gui.cardtable.ops_drag": "左键拖动：移动卡牌",
   "gui.cardtable.ops_shift_drop": "Shift 放置：倒扣打出",
   "gui.cardtable.ops_seat": "点击空位入座 · 本人座位离席",
-  "gui.cardtable.ops_hand": "滚轮 / 中键：翻看手牌",
+  "gui.cardtable.ops_hand": "滚轮 / 中键：翻看手牌 · 拖动手牌可理牌",
   "gui.cardtable.ops_backpack": "按键 %s：背包",
   "gui.cardtable.hand_hint": "%s　按住 Shift 放置：倒扣打出",
   "gui.cardtable.hand_overflow": "手牌 %s–%s / %s　滚轮或中键拖拽翻看",

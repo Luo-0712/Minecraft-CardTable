@@ -182,4 +182,14 @@ public final class TableSectionState
         }
         return null;
     }
+
+    /**
+     * Moves a hand card to {@code toIndex} (insert position after removal).
+     * Returns whether the order actually changed — a no-op or missing card
+     * leaves the hand untouched so the caller can skip a version bump.
+     */
+    public boolean reorderHand(UUID instanceId, int toIndex)
+    {
+        return com.example.cardtable.card.HandOrder.reorder(this.hand, instanceId, toIndex);
+    }
 }

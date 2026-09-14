@@ -1,13 +1,17 @@
 package com.example.cardtable.table;
 
+import com.example.cardtable.card.CardInstance;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.resources.ResourceLocation;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TableSectionStateTest
 {
@@ -68,6 +72,36 @@ class TableSectionStateTest
         CompoundTag legacy = new CompoundTag();
         legacy.putUUID("TableId", UUID.randomUUID());
         assertNull(TableSectionState.loadLegacy(legacy).getOccupantId());
+    }
+
+    @Test
+    void reorderHandMovesWithinTheOccupantsHand()
+    {
+        TableSectionState state = new TableSectionState();
+        CardInstance a = new CardInstance(new ResourceLocation("cardtable", "standard/a"));
+        CardInstance b = new CardInstance(new ResourceLocation("cardtable", "standard/b"));
+        CardInstance c = new CardInstance(new ResourceLocation("cardtable", "standard/c"));
+        state.addHandCard(a);
+        state.addHandCard(b);
+        state.addHandCard(c);
+
+        assertTrue(state.reorderHand(c.instanceId(), 0));
+        assertEquals(a.instanceId(), state.getHand().get(1).instanceId());
+        assertEquals(b.instanceId(), state.getHand().get(2).instanceId());
+        assertEquals(c.instanceId(), state.getHand().get(0).instanceId());
+
+        assertFalse(state.reorderHand(c.instanceId(), 0), "same slot must not claim a change");
+        assertEquals(3, state.getHand().size());
+    }
+
+    @Test
+    void reorderHandRejectsForeignCard()
+    {
+        TableSectionState state = new TableSectionState();
+        CardInstance a = new CardInstance(new ResourceLocation("cardtable", "standard/a"));
+        state.addHandCard(a);
+        assertFalse(state.reorderHand(UUID.randomUUID(), 0));
+        assertEquals(a.instanceId(), state.getHand().get(0).instanceId());
     }
 
     private static CompoundTag participantTag(UUID playerId)

@@ -2,7 +2,6 @@ package com.example.cardtable.client;
 
 import com.example.cardtable.network.packet.CursorSyncPacket;
 import net.minecraft.Util;
-import net.minecraft.core.BlockPos;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
@@ -45,7 +44,7 @@ public final class ClientCursorStore
     {
     }
 
-    private record Entry(BlockPos tablePosition, String playerName, float normX, float normY,
+    private record Entry(UUID tableId, String playerName, float normX, float normY,
                          long updatedAtMs)
     {
     }
@@ -56,27 +55,30 @@ public final class ClientCursorStore
     {
     }
 
-    /** Records one relayed sample. Ignored without a player id (a local report). */
+    /** Records one relayed sample. Ignored without a broadcast identity. */
     public static void update(CursorSyncPacket packet)
     {
-        if (packet.playerId() == null)
+        if (packet.playerId() == null || packet.tableId() == null)
         {
             return;
         }
-        CURSORS.put(packet.playerId(), new Entry(packet.tablePosition(), packet.playerName(),
+        CURSORS.put(packet.playerId(), new Entry(packet.tableId(), packet.playerName(),
                 packet.normX(), packet.normY(), Util.getMillis()));
     }
 
     /**
-     * Live cursors for the table the menu still points at, with expired
-     * entries dropped. Returns an empty list when the menu table is unknown
-     * so a closed screen cannot leak the previous session's cursors.
+     * Live cursors for the viewed table, with expired entries dropped. The
+     * caller passes the group's TableId read from its own synced group
+     * state — the same identity source the card data uses — so nothing
+     * packet-declared is ever matched against a locally resolved position.
+     * Returns an empty list when the identity is unknown so a closed screen
+     * cannot leak the previous session's cursors.
      */
-    public static List<CursorView> activeCursors(@Nullable BlockPos menuTablePosition)
+    public static List<CursorView> activeCursors(@Nullable UUID tableId)
     {
         long now = Util.getMillis();
         CURSORS.entrySet().removeIf(entry -> now - entry.getValue().updatedAtMs() > CURSOR_LIFETIME_MS);
-        if (menuTablePosition == null)
+        if (tableId == null)
         {
             return List.of();
         }
@@ -84,7 +86,7 @@ public final class ClientCursorStore
         for (Map.Entry<UUID, Entry> entry : CURSORS.entrySet())
         {
             Entry sample = entry.getValue();
-            if (!sample.tablePosition().equals(menuTablePosition))
+            if (!sample.tableId().equals(tableId))
             {
                 continue;
             }

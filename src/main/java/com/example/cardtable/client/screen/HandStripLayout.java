@@ -200,4 +200,50 @@ public final class HandStripLayout
         }
         return -1;
     }
+
+    /**
+     * Insert slot under a screen-space mouse x for a fan of {@code cardCount}
+     * cards. Returns {@code 0..cardCount}: 0 sits before the first card,
+     * {@code cardCount} after the last. The left half of a card's pitch opens
+     * a gap <em>before</em> that card, which is how overlapping fans read.
+     *
+     * <p>{@code cardCount} is the hand <em>without</em> the card currently
+     * held by the drag, so the result is already the post-removal insert
+     * index the reorder action expects.</p>
+     *
+     * @param contentOriginX screen x of the fan's content origin (scroll not yet applied)
+     */
+    public static int insertIndexAt(int cardCount, int pitch, int contentOriginX,
+                                    int scrollOffset, double mouseX)
+    {
+        if (cardCount <= 0)
+        {
+            return 0;
+        }
+        int offset = Math.max(0, scrollOffset);
+        for (int index = 0; index < cardCount; index++)
+        {
+            int left = contentOriginX + index * pitch - offset;
+            if (mouseX < left + pitch / 2.0D)
+            {
+                return index;
+            }
+        }
+        return cardCount;
+    }
+
+    /**
+     * Screen x of the gap that {@link #insertIndexAt} would pick: the left
+     * edge of the card at {@code insertIndex}, or just past the last card
+     * when inserting at the end.
+     */
+    public static int insertGapX(int cardCount, int pitch, int contentOriginX,
+                                 int scrollOffset, int insertIndex)
+    {
+        if (insertIndex >= cardCount)
+        {
+            return contentOriginX + Math.max(0, cardCount - 1) * pitch + CARD_WIDTH - scrollOffset;
+        }
+        return contentOriginX + insertIndex * pitch - scrollOffset;
+    }
 }

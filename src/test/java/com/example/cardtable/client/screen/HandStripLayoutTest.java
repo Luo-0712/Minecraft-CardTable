@@ -169,4 +169,47 @@ class HandStripLayoutTest
         assertEquals(4, HandStripLayout.indexAt(20, pitch, offset, -5, 10, 0));
         assertEquals(-1, HandStripLayout.indexAt(20, pitch, offset, -50, 10, 0));
     }
+
+    // Insert gap (manual sort) ------------------------------------------------
+
+    @Test
+    void emptyHandInsertsAtZero()
+    {
+        assertEquals(0, HandStripLayout.insertIndexAt(0, HandStripLayout.FULL_PITCH, 0, 0, 100));
+    }
+
+    @Test
+    void leftHalfOfSlotInsertsBeforeThatCard()
+    {
+        int pitch = HandStripLayout.FULL_PITCH;
+        int origin = 0;
+        // Card 0 left=0 mid=10; card 1 left=20 mid=30; card 2 left=40 mid=50.
+        assertEquals(0, HandStripLayout.insertIndexAt(3, pitch, origin, 0, 5));
+        assertEquals(1, HandStripLayout.insertIndexAt(3, pitch, origin, 0, 15));
+        assertEquals(2, HandStripLayout.insertIndexAt(3, pitch, origin, 0, 35));
+        assertEquals(3, HandStripLayout.insertIndexAt(3, pitch, origin, 0, 80));
+    }
+
+    @Test
+    void insertGapAccountsForScrollAndOrigin()
+    {
+        int pitch = HandStripLayout.MIN_PITCH;
+        int origin = 4;
+        int scroll = 20;
+        // Card 1's left = 4 + 8 - 20 = -8, mid = -4; card 2 left=0 mid=4.
+        assertEquals(2, HandStripLayout.insertIndexAt(5, pitch, origin, scroll, 0));
+        assertEquals(5, HandStripLayout.insertIndexAt(5, pitch, origin, scroll, 40));
+    }
+
+    @Test
+    void insertGapXPointsAtTheSlotEdge()
+    {
+        int pitch = HandStripLayout.FULL_PITCH;
+        // Before card 1: its left edge.
+        assertEquals(20, HandStripLayout.insertGapX(3, pitch, 0, 0, 1));
+        // After the last card: last left + full card width.
+        assertEquals(40 + HandStripLayout.CARD_WIDTH, HandStripLayout.insertGapX(3, pitch, 0, 0, 3));
+        // Empty hand still yields a sane origin.
+        assertEquals(HandStripLayout.CARD_WIDTH, HandStripLayout.insertGapX(0, pitch, 0, 0, 0));
+    }
 }

@@ -73,7 +73,7 @@
   "gui.cardtable.ops_drag": "Left-drag: move cards",
   "gui.cardtable.ops_shift_drop": "Shift+drop: play face down",
   "gui.cardtable.ops_seat": "Click empty seat to join · own seat to leave",
-  "gui.cardtable.ops_hand": "Wheel / middle-drag: pan hand",
+  "gui.cardtable.ops_hand": "Wheel / middle-drag: pan hand · drag cards to sort",
   "gui.cardtable.ops_backpack": "Key %s: backpack",
   "gui.cardtable.hand_hint": "%s   Shift+drop: play face down",
   "gui.cardtable.hand_overflow": "Hand %s–%s / %s   Wheel or middle-drag to pan",

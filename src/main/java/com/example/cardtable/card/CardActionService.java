@@ -117,7 +117,10 @@ public final class CardActionService
         {
             zoneLabel = zone.label().getString();
         }
-        TableNoticePacket notice = new TableNoticePacket(packet.tablePosition(),
+        // Key the toast by the group's TableId from the master's group state:
+        // receivers match it against their own synced group state, the same
+        // identity source their card data comes from.
+        TableNoticePacket notice = new TableNoticePacket(groupState.getTableId(),
                 actor.getGameProfile().getName(), zoneLabel);
         for (TableSectionState section : collectSections(level, group))
         {
@@ -171,6 +174,16 @@ public final class CardActionService
         if (action instanceof CardActionPacket.Action.Perform perform)
         {
             return performAction(level, group, actor, perform);
+        }
+        if (action instanceof CardActionPacket.Action.ReorderHand reorder)
+        {
+            TableSectionState ownSeat = ownSeat(level, group, actor);
+            if (ownSeat == null)
+            {
+                return false;
+            }
+            // Only a real order change bumps the version (see HandOrder.reorder).
+            return ownSeat.reorderHand(reorder.instanceId(), reorder.toIndex());
         }
         return false;
     }

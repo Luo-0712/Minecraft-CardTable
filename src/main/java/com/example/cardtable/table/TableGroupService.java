@@ -293,10 +293,12 @@ public final class TableGroupService
     public static boolean isSeated(Level level, BlockPos position, Player player)
     {
         GroupView group = resolve(level, position);
-        if (group == null)
-        {
-            return false;
-        }
+        return group != null && isSeated(level, group, player);
+    }
+
+    /** Whether the player occupies any seat of an already-resolved group. */
+    public static boolean isSeated(Level level, GroupView group, Player player)
+    {
         for (BlockPos pos : group.positions())
         {
             CardTableBlockEntity section = blockEntityAt(level, pos);

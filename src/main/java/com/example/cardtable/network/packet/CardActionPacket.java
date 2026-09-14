@@ -56,12 +56,24 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
         record Perform(ResourceLocation actionId, @Nullable UUID instanceId) implements Action
         {
         }
+
+        /**
+         * Manual hand sort: move a card already in the actor's own hand to
+         * {@code toIndex}. The index is the insert position after the card
+         * has been removed (0 = leftmost, {@code size} after remove = rightmost),
+         * matching the hand strip's gap picker. Only the owner's own hand is
+         * addressable; the server resolves the seat from the sender.
+         */
+        record ReorderHand(UUID instanceId, int toIndex) implements Action
+        {
+        }
     }
 
     private static final byte KIND_MOVE = 0;
     private static final byte KIND_FLIP = 1;
     private static final byte KIND_ROTATE = 2;
     private static final byte KIND_PERFORM = 3;
+    private static final byte KIND_REORDER_HAND = 4;
 
     public static void encode(CardActionPacket packet, FriendlyByteBuf buffer)
     {
@@ -96,6 +108,12 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
                 buffer.writeUUID(perform.instanceId());
             }
         }
+        else if (action instanceof Action.ReorderHand reorder)
+        {
+            buffer.writeByte(KIND_REORDER_HAND);
+            buffer.writeUUID(reorder.instanceId());
+            buffer.writeVarInt(reorder.toIndex());
+        }
     }
 
     public static CardActionPacket decode(FriendlyByteBuf buffer)
@@ -120,6 +138,7 @@ public record CardActionPacket(BlockPos tablePosition, Action action)
                 UUID instanceId = buffer.readBoolean() ? buffer.readUUID() : null;
                 yield new Action.Perform(actionId, instanceId);
             }
+            case KIND_REORDER_HAND -> new Action.ReorderHand(buffer.readUUID(), buffer.readVarInt());
             default -> throw new IllegalStateException("Unknown card action kind: " + kind);
         };
         return new CardActionPacket(tablePosition, action);
