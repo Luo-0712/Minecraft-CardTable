@@ -11,7 +11,9 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -28,6 +30,10 @@ import java.util.Map;
  * {@code icon} field existed — or half-authored ones — always draw something
  * sensible instead of erroring. The chain never throws and always yields an
  * icon.</p>
+ *
+ * <p>A second, back-first chain ({@link #backForStack}) serves the world-side
+ * deck pile: identical fallbacks, but the card back leads because that pile
+ * lies face-down on the table.</p>
  *
  * <p>Resolution is memoised per deck id. The chain touches NBT, the
  * {@link CardRegistry} and {@link RenderType} construction, none of which may
@@ -46,6 +52,8 @@ public final class DeckIconResolver
     private static final String UNBOUND_KEY = "";
 
     private static final Map<String, DeckIcon> CACHE = new HashMap<>();
+    /** Separate memo for the back-first chain; same keys, different fallback order. */
+    private static final Map<String, DeckIcon> BACK_CACHE = new HashMap<>();
 
     private DeckIconResolver()
     {
@@ -59,30 +67,56 @@ public final class DeckIconResolver
     /** Resolves the sprite for a deck stack; unbound stacks fall through to the core icon. */
     public static DeckIcon forStack(ItemStack stack)
     {
+        return forStack(stack, CACHE, DeckIconResolver::compute);
+    }
+
+    /**
+     * Resolves the sprite for the world-side deck pile: the card back leads
+     * the chain because the pile lies face-down, with the set icon and the
+     * core sprite as fallbacks. Unbound stacks fall through to the core icon.
+     */
+    public static DeckIcon backForStack(ItemStack stack)
+    {
+        return forStack(stack, BACK_CACHE, DeckIconResolver::computeBack);
+    }
+
+    private static DeckIcon forStack(ItemStack stack, Map<String, DeckIcon> cache,
+            java.util.function.Function<String, DeckIcon> loader)
+    {
         CompoundTag tag = stack.getTag();
         if (tag == null || !tag.contains(DeckItem.DECK_ID_TAG, CompoundTag.TAG_STRING))
         {
             return CACHE.computeIfAbsent(UNBOUND_KEY, key -> coreIcon());
         }
-        return CACHE.computeIfAbsent(tag.getString(DeckItem.DECK_ID_TAG), DeckIconResolver::compute);
+        return cache.computeIfAbsent(tag.getString(DeckItem.DECK_ID_TAG), loader);
     }
 
     /** Drops the memoised sprites; called from client setup, before anything renders. */
     public static void clearCache()
     {
         CACHE.clear();
+        BACK_CACHE.clear();
     }
 
     private static DeckIcon compute(String deckIdString)
     {
-        CardSetDefinition set = parseSet(deckIdString);
-        if (set != null)
+        return firstAvailable(iconCandidates(parseSet(deckIdString)));
+    }
+
+    private static DeckIcon computeBack(String deckIdString)
+    {
+        return firstAvailable(backCandidates(parseSet(deckIdString)));
+    }
+
+    /**
+     * First drawable sprite of a candidate chain; the core icon is the
+     * terminal candidate, so this always yields something.
+     */
+    private static DeckIcon firstAvailable(List<ResourceLocation> candidates)
+    {
+        for (ResourceLocation textureId : candidates)
         {
-            DeckIcon icon = fromTexture(set.iconTexture());
-            if (icon == null)
-            {
-                icon = fromTexture(set.defaultBackTexture());
-            }
+            DeckIcon icon = fromTexture(textureId);
             if (icon != null)
             {
                 return icon;
@@ -108,6 +142,52 @@ public final class DeckIconResolver
             // already reports the same problem to the player.
             return null;
         }
+    }
+
+    /**
+     * Ordered texture candidates for the deck item sprite: the set icon, the
+     * set back, then the core sprite. Pure function of the set definition —
+     * no texture lookup — so tests can lock the fallback order headless.
+     */
+    static List<ResourceLocation> iconCandidates(@Nullable CardSetDefinition set)
+    {
+        List<ResourceLocation> candidates = new ArrayList<>(3);
+        if (set != null)
+        {
+            if (set.iconTexture() != null)
+            {
+                candidates.add(set.iconTexture());
+            }
+            if (set.defaultBackTexture() != null)
+            {
+                candidates.add(set.defaultBackTexture());
+            }
+        }
+        candidates.add(CORE_TEXTURE_ID);
+        return candidates;
+    }
+
+    /**
+     * Ordered texture candidates for the world-side deck pile: the set back
+     * (the pile lies face-down), the set icon, then the core sprite. Pure
+     * function of the set definition, mirroring {@link #iconCandidates}.
+     */
+    static List<ResourceLocation> backCandidates(@Nullable CardSetDefinition set)
+    {
+        List<ResourceLocation> candidates = new ArrayList<>(3);
+        if (set != null)
+        {
+            if (set.defaultBackTexture() != null)
+            {
+                candidates.add(set.defaultBackTexture());
+            }
+            if (set.iconTexture() != null)
+            {
+                candidates.add(set.iconTexture());
+            }
+        }
+        candidates.add(CORE_TEXTURE_ID);
+        return candidates;
     }
 
     /**
